@@ -1,0 +1,9 @@
+# 桌面端依赖（Windows 11）
+# 说明：
+#   - winsdk 官方只提供到 Python 3.11 的轮子（3.12+ 装不上）；
+#   - Python 3.12+ 请使用 pywinrt 拆分包，代码会自动切换到该后端；
+#   - 没有媒体后端时程序仍可用（降级读取网易云窗口标题）。
+PyQt6>=6.6
+requests>=2.31
+winsdk==1.0.0b10; python_version < "3.12"
+winrt-Windows.Media.Control>=3.2.1; python_version >= "3.12"

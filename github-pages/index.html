@@ -1,0 +1,1205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="任务栏待办" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+  <title>Taskbar Sync · 手机端待办控制台</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --card-soft: #243449;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.18);
+      --danger: #f43f5e;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --border: rgba(255, 255, 255, 0.08);
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(1200px 600px at 10% -10%, #1e293b 0%, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+      padding: calc(14px + env(safe-area-inset-top)) 14px calc(20px + env(safe-area-inset-bottom));
+      max-width: 560px;
+      margin: 0 auto;
+    }
+    header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 16px; }
+    .brand h1 { font-size: 1.2rem; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+    .brand p { font-size: 0.76rem; color: var(--muted); margin-top: 3px; }
+    .status-pill {
+      font-size: 0.74rem; padding: 7px 11px; border-radius: 999px; background: var(--card);
+      border: 1px solid var(--border); color: var(--muted); cursor: pointer;
+      display: flex; align-items: center; gap: 6px; white-space: nowrap; flex-shrink: 0;
+    }
+    .status-pill:active { transform: scale(0.98); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); flex-shrink: 0; }
+    .dot.online { background: var(--success); box-shadow: 0 0 8px var(--success); }
+    .dot.error { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+    .dot.busy { background: var(--accent); animation: pulse 1s infinite; }
+    @keyframes pulse { 50% { opacity: 0.35; } }
+
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 15px; margin-bottom: 14px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+    }
+    .config-panel { display: none; }
+    .config-panel.active { display: block; }
+    .field { margin-bottom: 11px; }
+    .field label { display: block; font-size: 0.76rem; color: var(--muted); margin-bottom: 6px; }
+    input[type="text"], input[type="password"], input[type="time"], input[type="date"], select, textarea {
+      width: 100%; background: #0b1220; border: 1px solid var(--border); color: var(--text);
+      padding: 11px 12px; border-radius: 10px; font-size: 0.92rem; outline: none;
+      font-family: inherit; appearance: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+    .row { display: flex; gap: 9px; }
+    .row > * { flex: 1; min-width: 0; }
+    .hint { font-size: 0.72rem; color: var(--muted); line-height: 1.6; margin-top: 6px; }
+    .hint a { color: var(--accent); text-decoration: none; }
+
+    button {
+      background: var(--accent); color: #0b1220; font-weight: 600; border: none;
+      padding: 11px 15px; border-radius: 10px; font-size: 0.9rem; cursor: pointer;
+      transition: opacity 0.15s ease, transform 0.1s ease; font-family: inherit;
+    }
+    button:active { transform: scale(0.98); }
+    button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+    button.danger { background: transparent; color: var(--danger); border: 1px solid rgba(244, 63, 94, 0.35); }
+    button:disabled { opacity: 0.5; }
+
+    .add-form { display: flex; flex-direction: column; gap: 9px; }
+    .add-form .row button { flex: 0 0 auto; padding-left: 20px; padding-right: 20px; }
+
+    .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+    .tab {
+      flex: 1; text-align: center; padding: 8px; font-size: 0.8rem; border-radius: 10px;
+      background: var(--card); color: var(--muted); border: 1px solid var(--border); cursor: pointer;
+    }
+    .tab.active { background: var(--accent-glow); color: var(--accent); border-color: var(--accent); font-weight: 600; }
+
+    .todo-list { display: flex; flex-direction: column; gap: 10px; min-height: 40px; }
+    .todo-item {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 12px 13px; display: flex; align-items: flex-start; gap: 11px; transition: background 0.15s;
+    }
+    .todo-item.done { opacity: 0.55; }
+    .todo-item.alerting { border-color: rgba(244, 63, 94, 0.5); box-shadow: 0 0 0 1px rgba(244, 63, 94, 0.25); }
+    .checkbox {
+      width: 23px; height: 23px; border-radius: 7px; border: 2px solid var(--accent);
+      display: flex; align-items: center; justify-content: center; cursor: pointer;
+      flex-shrink: 0; background: transparent; color: #0b1220; font-size: 0.9rem; font-weight: 700;
+      padding: 0; margin-top: 1px;
+    }
+    .todo-item.done .checkbox { background: var(--success); border-color: var(--success); color: #052e1f; }
+    .todo-content { flex: 1; min-width: 0; }
+    .todo-title { font-size: 0.94rem; font-weight: 500; word-break: break-word; line-height: 1.4; }
+    .todo-item.done .todo-title { text-decoration: line-through; color: var(--muted); }
+    .todo-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 5px; font-size: 0.72rem; color: var(--muted); align-items: center; }
+    .badge { padding: 2px 7px; border-radius: 6px; font-weight: 600; font-size: 0.68rem; }
+    .badge.high { background: rgba(244, 63, 94, 0.18); color: var(--danger); }
+    .badge.normal { background: rgba(56, 189, 248, 0.14); color: var(--accent); }
+    .remind { color: var(--warning); }
+    .remind.overdue { color: var(--danger); }
+    .item-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+    .icon-btn {
+      background: transparent; border: none; color: var(--muted); font-size: 0.85rem;
+      padding: 4px 6px; border-radius: 8px; cursor: pointer; line-height: 1;
+    }
+    .icon-btn:hover { background: rgba(148, 163, 184, 0.12); color: var(--text); }
+    .empty { text-align: center; color: var(--muted); padding: 34px 16px; font-size: 0.86rem; }
+
+    .footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 14px; font-size: 0.72rem; color: var(--muted); }
+    .footer button { padding: 8px 12px; font-size: 0.78rem; }
+
+    .toast {
+      position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+      background: #334155; color: #fff; padding: 9px 17px; border-radius: 999px; font-size: 0.8rem;
+      opacity: 0; pointer-events: none; transition: opacity 0.25s; z-index: 100; max-width: 86vw; text-align: center;
+    }
+    .toast.show { opacity: 1; }
+    .toast.error { background: #7f1d1d; }
+
+    .modal { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.72); display: none; align-items: center; justify-content: center; padding: 18px; z-index: 60; }
+    .modal.active { display: flex; }
+    .modal-card { background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 17px; width: 100%; max-width: 460px; }
+    .modal-card h2 { font-size: 1rem; margin-bottom: 13px; }
+    .modal-actions { display: flex; gap: 9px; margin-top: 14px; }
+    .modal-actions > * { flex: 1; }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>🎵 任务栏待办同步台</h1>
+      <p>手机端随时记录 · Win11 任务栏实时轮播与提醒</p>
+    </div>
+    <button class="status-pill" id="statusPill" type="button" title="点击展开云同步配置">
+      <span class="dot" id="syncDot"></span>
+      <span id="syncText">未配置</span>
+    </button>
+  </header>
+
+  <!-- GitHub Gist 云同步配置 -->
+  <section class="card config-panel" id="configPanel">
+    <div class="field">
+      <label for="ghToken">GitHub Personal Access Token（classic，勾选 gist 权限即可）</label>
+      <input type="password" id="ghToken" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="gistId">Gist ID（留空可点「创建新 Gist」自动生成）</label>
+      <input type="text" id="gistId" placeholder="例如：a1b2c3d4e5f6..." autocomplete="off" />
+    </div>
+    <div class="row">
+      <button type="button" id="saveConfigBtn">保存并同步</button>
+      <button type="button" class="secondary" id="createGistBtn">创建新 Gist</button>
+    </div>
+    <div class="row" style="margin-top:9px;">
+      <button type="button" class="secondary" id="syncNowBtn">🔄 立即同步</button>
+      <button type="button" class="secondary" id="hideConfigBtn">收起配置</button>
+    </div>
+    <p class="hint">
+      Token 只保存在本机浏览器 localStorage 中，不会写进仓库；Gist 为「不公开列表」的私密 Gist。
+      电脑端右键任务栏胶囊 →「配置 GitHub Gist 云同步」填入同一组 Token + Gist ID 即可双向同步。
+    </p>
+  </section>
+
+  <!-- 添加待办 -->
+  <section class="card">
+    <div class="add-form">
+      <label class="sr-only" for="todoInput">待办内容</label>
+      <input type="text" id="todoInput" placeholder="输入今天要做的事（会在电脑任务栏轮播）..." maxlength="200" />
+      <div class="row">
+        <select id="todoDate" aria-label="提醒日期">
+          <option value="">不提醒</option>
+          <option value="today">今天</option>
+          <option value="tomorrow">明天</option>
+        </select>
+        <input type="time" id="todoTime" aria-label="提醒时间" />
+        <select id="todoPriority" aria-label="优先级">
+          <option value="normal">普通</option>
+          <option value="high">🔥 紧急</option>
+        </select>
+        <button type="button" id="addBtn">+ 添加</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 筛选标签 -->
+  <nav class="tabs" id="tabs">
+    <div class="tab active" data-filter="pending" role="button" tabindex="0">未完成 (<span id="count-pending">0</span>)</div>
+    <div class="tab" data-filter="all" role="button" tabindex="0">全部 (<span id="count-all">0</span>)</div>
+    <div class="tab" data-filter="done" role="button" tabindex="0">已完成 (<span id="count-done">0</span>)</div>
+  </nav>
+
+  <main class="todo-list" id="todoList"></main>
+
+  <div class="footer">
+    <button type="button" class="secondary" id="clearDoneBtn">清除已完成</button>
+    <span id="syncDetail">尚未同步</span>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- 编辑弹层 -->
+  <div class="modal" id="editModal">
+    <div class="modal-card">
+      <h2>编辑待办</h2>
+      <div class="field">
+        <label for="editText">内容</label>
+        <textarea id="editText" rows="2" maxlength="200"></textarea>
+      </div>
+      <div class="row">
+        <select id="editDate" aria-label="提醒日期">
+          <option value="">不提醒</option>
+          <option value="today">今天</option>
+          <option value="tomorrow">明天</option>
+        </select>
+        <input type="time" id="editTime" aria-label="提醒时间" />
+        <select id="editPriority" aria-label="优先级">
+          <option value="normal">普通</option>
+          <option value="high">🔥 紧急</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="secondary" id="editCancelBtn">取消</button>
+        <button type="button" id="editSaveBtn">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  /* ========================================================================
+   * 同步协议 v2 —— 与 desktop/core.py 完全一致的纯函数实现。
+   * 浏览器端与 Node 测试脚本共用：通过 window.__TBL_PROTOCOL__ 暴露，
+   * 因此这里不做任何 DOM / localStorage 操作。
+   * ====================================================================== */
+  (function () {
+    'use strict';
+
+    const SCHEMA_VERSION = 2;
+    const GIST_FILENAME = 'taskbar_todos.json';
+    const EPOCH_ISO = '1970-01-01T00:00:00+00:00';
+    const REMIND_GRACE_SECONDS = 24 * 3600;
+    const TOMBSTONE_TTL_DAYS = 180;
+    const MAX_TOMBSTONES = 200;
+    const PRIORITY_HIGH = 'high';
+    const PRIORITY_NORMAL = 'normal';
+    const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+    const pad2 = (value) => String(value).padStart(2, '0');
+
+    function toIso(date) {
+      const value = date instanceof Date ? date : new Date();
+      if (Number.isNaN(value.getTime())) return EPOCH_ISO;
+      const offsetMinutes = -value.getTimezoneOffset();
+      const sign = offsetMinutes >= 0 ? '+' : '-';
+      const abs = Math.abs(offsetMinutes);
+      return (
+        value.getFullYear() + '-' + pad2(value.getMonth() + 1) + '-' + pad2(value.getDate()) +
+        'T' + pad2(value.getHours()) + ':' + pad2(value.getMinutes()) + ':' + pad2(value.getSeconds()) +
+        sign + pad2(Math.floor(abs / 60)) + ':' + pad2(abs % 60)
+      );
+    }
+    const nowIso = () => toIso(new Date());
+
+    function parseIso(text) {
+      if (!text || typeof text !== 'string') return null;
+      const trimmed = text.trim();
+      if (!trimmed) return null;
+      let normalized = trimmed;
+      // 兼容 "2026-10-17 18:30:00" 这类没有 T 的旧格式
+      if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(normalized)) {
+        normalized = normalized.replace(' ', 'T');
+      }
+      const date = new Date(normalized);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+    function isoRank(text) {
+      const date = parseIso(text);
+      return date ? date.getTime() / 1000 : 0;
+    }
+    function normalizeIso(text, fallback) {
+      const date = parseIso(text);
+      return date ? toIso(date) : fallback;
+    }
+
+    function newId(prefix) {
+      return (prefix || 'td') + '-' + Date.now() + '-' + Math.random().toString(16).slice(2, 8);
+    }
+    function normalizeRemindAt(text) {
+      const value = String(text || '').trim();
+      return TIME_RE.test(value) ? value : '';
+    }
+    function normalizeRemindDate(text) {
+      const value = String(text || '').trim();
+      if (!DATE_RE.test(value)) return '';
+      const date = new Date(value + 'T00:00:00');
+      return Number.isNaN(date.getTime()) ? '' : value;
+    }
+
+    function normalizeTodo(raw) {
+      if (!raw || typeof raw !== 'object') return null;
+      const text = String(raw.text || raw.title || raw.content || '').trim();
+      if (!text) return null;
+
+      const created = normalizeIso(raw.created_at || raw.createdAt, EPOCH_ISO);
+      const updated = normalizeIso(raw.updated_at || raw.updatedAt, created);
+      let priority = String(raw.priority || PRIORITY_NORMAL).trim().toLowerCase();
+      if (priority !== PRIORITY_HIGH) priority = PRIORITY_NORMAL;
+      const done = Boolean(raw.done);
+      let doneAt = done ? normalizeIso(raw.done_at || raw.doneAt, updated) : '';
+      const notifiedAt = raw.notified_at ? normalizeIso(raw.notified_at, '') : '';
+
+      // 键按字母顺序排列，保证 canonical() 与 Python 端的 sort_keys 输出一致
+      return {
+        created_at: created,
+        done: done,
+        done_at: doneAt,
+        id: String(raw.id || newId()),
+        notified_at: notifiedAt,
+        priority: priority,
+        remind_at: normalizeRemindAt(raw.remind_at || raw.remind_time),
+        remind_date: normalizeRemindDate(raw.remind_date || raw.remindDate),
+        text: text,
+        updated_at: updated,
+      };
+    }
+
+    function emptyDoc() {
+      return { schema: SCHEMA_VERSION, version: 0, updated_at: EPOCH_ISO, todos: [], tombstones: [] };
+    }
+
+    function normalizeDoc(raw) {
+      const doc = emptyDoc();
+      if (!raw || typeof raw !== 'object') return doc;
+      const seen = new Set();
+      if (Array.isArray(raw.todos)) {
+        raw.todos.forEach((entry) => {
+          const todo = normalizeTodo(entry);
+          if (todo && !seen.has(todo.id)) {
+            seen.add(todo.id);
+            doc.todos.push(todo);
+          }
+        });
+      }
+      const seenTomb = new Set();
+      if (Array.isArray(raw.tombstones)) {
+        raw.tombstones.forEach((entry) => {
+          if (!entry || typeof entry !== 'object' || !entry.id) return;
+          const id = String(entry.id);
+          if (seenTomb.has(id)) return;
+          const deletedAt = normalizeIso(entry.deleted_at, '');
+          if (!deletedAt) return;
+          seenTomb.add(id);
+          doc.tombstones.push({ deleted_at: deletedAt, id: id });
+        });
+      }
+      const version = parseInt(raw.version, 10);
+      doc.version = Number.isFinite(version) && version > 0 ? version : 0;
+      doc.updated_at = normalizeIso(raw.updated_at, EPOCH_ISO);
+      doc.todos.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      doc.tombstones.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      return doc;
+    }
+
+    function canonicalItem(todo) {
+      return {
+        created_at: todo.created_at,
+        done: todo.done,
+        done_at: todo.done_at,
+        id: todo.id,
+        notified_at: todo.notified_at,
+        priority: todo.priority,
+        remind_at: todo.remind_at,
+        remind_date: todo.remind_date,
+        text: todo.text,
+        updated_at: todo.updated_at,
+      };
+    }
+    function canonical(doc) {
+      const normalized = normalizeDoc(doc);
+      return JSON.stringify({
+        todos: normalized.todos.map(canonicalItem),
+        tombstones: normalized.tombstones.map((item) => ({ deleted_at: item.deleted_at, id: item.id })),
+      });
+    }
+    function docsEqual(a, b) {
+      return canonical(a) === canonical(b);
+    }
+
+    function mergeDocs(local, remote) {
+      const left = normalizeDoc(local);
+      const right = normalizeDoc(remote);
+
+      const todos = new Map();
+      left.todos.forEach((item) => todos.set(item.id, item));
+      right.todos.forEach((item) => {
+        const current = todos.get(item.id);
+        if (!current || isoRank(item.updated_at) >= isoRank(current.updated_at)) {
+          todos.set(item.id, item);
+        }
+      });
+
+      const tombstones = new Map();
+      left.tombstones.forEach((item) => tombstones.set(item.id, item));
+      right.tombstones.forEach((item) => {
+        const current = tombstones.get(item.id);
+        if (!current || isoRank(item.deleted_at) > isoRank(current.deleted_at)) {
+          tombstones.set(item.id, item);
+        }
+      });
+
+      tombstones.forEach((tombstone, id) => {
+        const todo = todos.get(id);
+        if (!todo) return;
+        if (isoRank(tombstone.deleted_at) >= isoRank(todo.updated_at)) {
+          todos.delete(id);
+        } else {
+          tombstones.delete(id);
+        }
+      });
+
+      const pruneBefore = Date.now() / 1000 - TOMBSTONE_TTL_DAYS * 86400;
+      let kept = Array.from(tombstones.values())
+        .filter((item) => isoRank(item.deleted_at) >= pruneBefore)
+        .sort((a, b) => isoRank(b.deleted_at) - isoRank(a.deleted_at))
+        .slice(0, MAX_TOMBSTONES);
+      kept.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+      const mergedTodos = Array.from(todos.values()).sort((a, b) =>
+        a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+      );
+      return {
+        schema: SCHEMA_VERSION,
+        version: Math.max(left.version, right.version) + 1,
+        updated_at: nowIso(),
+        todos: mergedTodos,
+        tombstones: kept,
+      };
+    }
+    function needsPush(local, remote) {
+      return canonical(mergeDocs(local, remote)) !== canonical(remote);
+    }
+
+    function cloneDoc(doc) {
+      return normalizeDoc(JSON.parse(JSON.stringify(doc)));
+    }
+
+    function addTodo(doc, fields) {
+      const normalized = cloneDoc(doc);
+      const now = nowIso();
+      const todo = normalizeTodo({
+        id: fields.id || newId(),
+        text: fields.text,
+        priority: fields.priority,
+        done: false,
+        created_at: now,
+        updated_at: now,
+        remind_at: fields.remind_at,
+        remind_date: fields.remind_date,
+        notified_at: '',
+        done_at: '',
+      });
+      if (!todo) return normalized;
+      normalized.todos = normalized.todos.filter((item) => item.id !== todo.id);
+      normalized.todos.push(todo);
+      normalized.todos.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      normalized.version += 1;
+      normalized.updated_at = now;
+      return normalized;
+    }
+
+    function updateTodo(doc, todoId, patch) {
+      const normalized = cloneDoc(doc);
+      const now = nowIso();
+      normalized.todos.forEach((item) => {
+        if (item.id !== todoId) return;
+        if (patch.text !== undefined) {
+          const text = String(patch.text || '').trim();
+          if (text) item.text = text;
+        }
+        if (patch.priority !== undefined) {
+          item.priority = patch.priority === PRIORITY_HIGH ? PRIORITY_HIGH : PRIORITY_NORMAL;
+        }
+        if (patch.remind_at !== undefined) item.remind_at = normalizeRemindAt(patch.remind_at);
+        if (patch.remind_date !== undefined) item.remind_date = normalizeRemindDate(patch.remind_date);
+        if (patch.done !== undefined) {
+          const done = Boolean(patch.done);
+          item.done = done;
+          item.done_at = done ? now : '';
+          if (!done) item.notified_at = '';
+        }
+        if (patch.notified_at !== undefined) {
+          item.notified_at = patch.notified_at ? normalizeIso(patch.notified_at, '') : '';
+        }
+        item.updated_at = now;
+      });
+      normalized.version += 1;
+      normalized.updated_at = now;
+      return normalized;
+    }
+    function setDone(doc, todoId, done) {
+      return updateTodo(doc, todoId, { done: done !== false });
+    }
+    function deleteTodo(doc, todoId) {
+      const normalized = cloneDoc(doc);
+      const now = nowIso();
+      normalized.todos = normalized.todos.filter((item) => item.id !== todoId);
+      normalized.tombstones = normalized.tombstones.filter((item) => item.id !== todoId);
+      normalized.tombstones.push({ deleted_at: now, id: todoId });
+      normalized.version += 1;
+      normalized.updated_at = now;
+      return normalized;
+    }
+
+    function reminderDatetime(todo) {
+      const remindAt = normalizeRemindAt(todo.remind_at);
+      if (!remindAt) return null;
+      const parts = remindAt.split(':');
+      const hour = parseInt(parts[0], 10);
+      const minute = parseInt(parts[1], 10);
+      let day = null;
+      if (normalizeRemindDate(todo.remind_date)) {
+        day = new Date(todo.remind_date + 'T00:00:00');
+      }
+      if (!day || Number.isNaN(day.getTime())) {
+        const created = parseIso(todo.created_at) || new Date();
+        day = new Date(created.getFullYear(), created.getMonth(), created.getDate());
+      }
+      return new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour, minute, 0);
+    }
+
+    function dueReminder(todo, now) {
+      if (!todo || todo.done || todo.notified_at) return false;
+      const target = reminderDatetime(todo);
+      if (!target) return false;
+      const delta = ((now || new Date()).getTime() - target.getTime()) / 1000;
+      return delta >= 0 && delta <= REMIND_GRACE_SECONDS;
+    }
+
+    function formatReminder(todo, now) {
+      const target = reminderDatetime(todo);
+      if (!target) return '';
+      const today = now ? new Date(now) : new Date();
+      const midnight = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      const targetMidnight = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+      // 用两个“零点”相减得到日历天差，避免 15:30 这类时刻被四舍五入成“明天”
+      const dayDiff = Math.round((targetMidnight.getTime() - midnight.getTime()) / 86400000);
+      let prefix;
+      if (dayDiff === 0) prefix = '今天';
+      else if (dayDiff === 1) prefix = '明天';
+      else prefix = pad2(target.getMonth() + 1) + '-' + pad2(target.getDate());
+      return prefix + ' ' + pad2(target.getHours()) + ':' + pad2(target.getMinutes());
+    }
+    function reminderDue(todo, now) {
+      return dueReminder(todo, now);
+    }
+    function pendingTodos(doc) {
+      const items = normalizeDoc(doc).todos.filter((item) => !item.done);
+      const rank = (item) => {
+        const target = reminderDatetime(item);
+        return target ? target.getTime() : Number.MAX_SAFE_INTEGER;
+      };
+      return items.sort((a, b) => {
+        const pa = a.priority === PRIORITY_HIGH ? 0 : 1;
+        const pb = b.priority === PRIORITY_HIGH ? 0 : 1;
+        if (pa !== pb) return pa - pb;
+        const ra = rank(a);
+        const rb = rank(b);
+        if (ra !== rb) return ra - rb;
+        return isoRank(a.created_at) - isoRank(b.created_at);
+      });
+    }
+
+    const protocol = {
+      SCHEMA_VERSION: SCHEMA_VERSION,
+      GIST_FILENAME: GIST_FILENAME,
+      GIST_API_BASE: 'https://api.github.com',
+      PRIORITY_HIGH: PRIORITY_HIGH,
+      PRIORITY_NORMAL: PRIORITY_NORMAL,
+      nowIso: nowIso,
+      toIso: toIso,
+      parseIso: parseIso,
+      isoRank: isoRank,
+      newId: newId,
+      normalizeTodo: normalizeTodo,
+      normalizeDoc: normalizeDoc,
+      emptyDoc: emptyDoc,
+      canonical: canonical,
+      docsEqual: docsEqual,
+      mergeDocs: mergeDocs,
+      needsPush: needsPush,
+      addTodo: addTodo,
+      updateTodo: updateTodo,
+      setDone: setDone,
+      deleteTodo: deleteTodo,
+      pendingTodos: pendingTodos,
+      reminderDatetime: reminderDatetime,
+      dueReminder: dueReminder,
+      formatReminder: formatReminder,
+    };
+
+    if (typeof window !== 'undefined') {
+      window.__TBL_PROTOCOL__ = protocol;
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('DOMContentLoaded', initApp);
+    }
+
+    /* ====================================================================
+     * 以下是浏览器应用层：localStorage 持久化 + GitHub Gist 同步 + 渲染。
+     * 纯函数测试不需要执行到这里。
+     * ================================================================== */
+
+    const STORAGE_CONFIG = 'tbl.config.v2';
+    const STORAGE_DOC = 'tbl.doc.v2';
+    const STORAGE_ETAG = 'tbl.etag.v2';
+    const STORAGE_REMOTE = 'tbl.remote.v2';
+    const STORAGE_META = 'tbl.meta.v2';
+    const SYNC_INTERVAL_MS = 60000;
+
+    const state = {
+      config: { token: '', gistId: '' },
+      doc: emptyDoc(),
+      etag: null,
+      remoteDoc: null,
+      meta: { dirty: false, lastSync: '', lastError: '' },
+      filter: 'pending',
+      syncing: false,
+      pendingSync: false,
+      syncTimer: null,
+      editingId: null,
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function toast(message, isError) {
+      const element = $('toast');
+      if (!element) return;
+      element.textContent = message;
+      element.classList.toggle('error', Boolean(isError));
+      element.classList.add('show');
+      clearTimeout(toast._timer);
+      toast._timer = setTimeout(() => element.classList.remove('show'), 2600);
+    }
+
+    function readJson(key, fallback) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return fallback;
+        const parsed = JSON.parse(raw);
+        return parsed === null || parsed === undefined ? fallback : parsed;
+      } catch (error) {
+        return fallback;
+      }
+    }
+
+    function config() {
+      return state.config;
+    }
+    function isConfigured() {
+      return Boolean(state.config.token && state.config.gistId);
+    }
+
+    function loadState() {
+      const savedConfig = readJson(STORAGE_CONFIG, null);
+      if (savedConfig && typeof savedConfig === 'object') {
+        state.config = {
+          token: String(savedConfig.token || ''),
+          gistId: String(savedConfig.gistId || ''),
+        };
+      } else {
+        // 兼容 v1 的 localStorage 键名
+        state.config = {
+          token: localStorage.getItem('gh_token') || '',
+          gistId: localStorage.getItem('gh_gist_id') || '',
+        };
+      }
+      const savedDoc = readJson(STORAGE_DOC, null);
+      if (savedDoc && Array.isArray(savedDoc.todos)) {
+        state.doc = normalizeDoc(savedDoc);
+      } else {
+        // 兼容 v1 的 localStorage 键名：local_todos 是一个待办数组
+        const legacyTodos = readJson('local_todos', []);
+        state.doc = normalizeDoc(Array.isArray(legacyTodos) ? { todos: legacyTodos } : {});
+      }
+      state.etag = localStorage.getItem(STORAGE_ETAG) || null;
+      state.remoteDoc = readJson(STORAGE_REMOTE, null);
+      const meta = readJson(STORAGE_META, null);
+      if (meta && typeof meta === 'object') {
+        state.meta = {
+          dirty: Boolean(meta.dirty),
+          lastSync: String(meta.lastSync || ''),
+          lastError: String(meta.lastError || ''),
+        };
+      }
+      $('ghToken').value = state.config.token;
+      $('gistId').value = state.config.gistId;
+    }
+
+    function saveConfig() {
+      localStorage.setItem(STORAGE_CONFIG, JSON.stringify(state.config));
+      localStorage.setItem('gh_token', state.config.token); // 兼容 v1 键名
+      localStorage.setItem('gh_gist_id', state.config.gistId);
+    }
+    function saveDoc() {
+      localStorage.setItem(STORAGE_DOC, JSON.stringify(state.doc));
+    }
+    function saveMeta() {
+      localStorage.setItem(STORAGE_META, JSON.stringify(state.meta));
+      if (state.etag) localStorage.setItem(STORAGE_ETAG, state.etag);
+      else localStorage.removeItem(STORAGE_ETAG);
+      if (state.remoteDoc) localStorage.setItem(STORAGE_REMOTE, JSON.stringify(state.remoteDoc));
+      else localStorage.removeItem(STORAGE_REMOTE);
+    }
+    function markDirty() {
+      state.meta.dirty = true;
+      saveMeta();
+    }
+
+    /* -------------------- GitHub API -------------------- */
+    function apiUrl(path) {
+      return protocol.GIST_API_BASE + path;
+    }
+    function authHeaders(extra) {
+      const headers = {
+        Authorization: 'Bearer ' + state.config.token,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      };
+      if (extra) Object.assign(headers, extra);
+      return headers;
+    }
+    function apiError(response) {
+      if (response.status === 401) return new Error('Token 无效或已过期（401），请重新配置');
+      if (response.status === 403) return new Error('GitHub 拒绝访问（403，通常为限流或无 gist 权限）');
+      if (response.status === 404) return new Error('Gist 不存在（404），请检查 Gist ID');
+      return new Error('GitHub API 请求失败（HTTP ' + response.status + '）');
+    }
+    async function getRemote(etag) {
+      const headers = authHeaders(etag ? { 'If-None-Match': etag } : undefined);
+      const response = await fetch(apiUrl('/gists/' + state.config.gistId), { headers: headers });
+      if (response.status === 304) return { notModified: true };
+      if (!response.ok) throw apiError(response);
+      const payload = await response.json();
+      const file = payload.files && payload.files[protocol.GIST_FILENAME];
+      if (!file) throw new Error('Gist 中缺少 ' + protocol.GIST_FILENAME + ' 文件');
+      if (file.truncated) throw new Error('Gist 文件内容被截断（超过 1MB），请清理待办数据');
+      let parsed;
+      try {
+        parsed = JSON.parse(file.content || '{}');
+      } catch (error) {
+        throw new Error('Gist 中的 JSON 解析失败：' + error.message);
+      }
+      return { doc: normalizeDoc(parsed), etag: response.headers.get('ETag') };
+    }
+    async function putRemote(doc) {
+      const body = {
+        files: {},
+      };
+      body.files[protocol.GIST_FILENAME] = { content: JSON.stringify(normalizeDoc(doc), null, 2) };
+      const response = await fetch(apiUrl('/gists/' + state.config.gistId), {
+        method: 'PATCH',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw apiError(response);
+      return { doc: normalizeDoc(doc), etag: response.headers.get('ETag') || null };
+    }
+    async function createGist() {
+      const body = {
+        description: 'Win11 Taskbar Lyrics & Todo Sync Data',
+        public: false,
+        files: {},
+      };
+      body.files[protocol.GIST_FILENAME] = { content: JSON.stringify(state.doc, null, 2) };
+      const response = await fetch(apiUrl('/gists'), {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw apiError(response);
+      const payload = await response.json();
+      if (!payload.id) throw new Error('创建 Gist 成功但响应中没有 id');
+      return payload.id;
+    }
+
+    /* -------------------- 同步流程 -------------------- */
+    function setStatus(kind, text) {
+      const dot = $('syncDot');
+      const label = $('syncText');
+      dot.className = 'dot' + (kind === 'ok' ? ' online' : kind === 'error' ? ' error' : kind === 'busy' ? ' busy' : '');
+      label.textContent = text;
+    }
+    function updateSyncDetail() {
+      const detail = $('syncDetail');
+      if (!isConfigured()) {
+        detail.textContent = '未配置云同步（数据仅保存在本机）';
+        return;
+      }
+      if (state.meta.lastError) {
+        detail.textContent = '上次同步失败：' + state.meta.lastError;
+        return;
+      }
+      if (state.meta.lastSync) {
+        const date = parseIso(state.meta.lastSync);
+        detail.textContent = '上次同步 ' + (date ? pad2(date.getHours()) + ':' + pad2(date.getMinutes()) : state.meta.lastSync) + (state.meta.dirty ? ' · 有本地改动待推送' : '');
+      } else {
+        detail.textContent = '尚未同步';
+      }
+    }
+
+    async function syncNow(reason) {
+      if (!isConfigured()) {
+        toast('请先在配置面板填写 Token 与 Gist ID', true);
+        return;
+      }
+      if (state.syncing) {
+        state.pendingSync = true;
+        return;
+      }
+      state.syncing = true;
+      setStatus('busy', '同步中…');
+      try {
+        let remote = null;
+        const fetched = await getRemote(state.etag);
+        if (fetched.notModified) {
+          remote = state.remoteDoc;
+          if (!remote) {
+            const full = await getRemote(null);
+            remote = full.doc;
+            state.etag = full.etag;
+          }
+        } else {
+          remote = fetched.doc;
+          state.etag = fetched.etag;
+          state.remoteDoc = remote;
+        }
+
+        let merged = mergeDocs(state.doc, remote);
+        const shouldPush = state.meta.dirty || needsPush(merged, remote);
+        if (shouldPush) {
+          const result = await putRemote(merged);
+          merged = result.doc;
+          state.etag = result.etag;
+          state.remoteDoc = merged;
+          state.meta.dirty = false;
+        }
+        state.doc = normalizeDoc(merged);
+        state.meta.lastSync = nowIso();
+        state.meta.lastError = '';
+        saveDoc();
+        saveMeta();
+        renderTodos();
+        setStatus('ok', '已同步');
+        if (reason && shouldPush) toast('☁️ 已同步到电脑端');
+      } catch (error) {
+        state.meta.lastError = error.message || String(error);
+        saveMeta();
+        setStatus('error', '同步失败');
+        updateSyncDetail();
+        toast(state.meta.lastError, true);
+      } finally {
+        state.syncing = false;
+        updateSyncDetail();
+        if (state.pendingSync) {
+          state.pendingSync = false;
+          setTimeout(() => syncNow('补同步'), 900);
+        }
+      }
+    }
+
+    let syncDebounce = null;
+    function scheduleSync(delay) {
+      if (!isConfigured()) return;
+      clearTimeout(syncDebounce);
+      syncDebounce = setTimeout(() => syncNow('本地改动'), delay || 900);
+    }
+
+    /* -------------------- 本地变更 -------------------- */
+    function applyDoc(newDoc, message) {
+      state.doc = normalizeDoc(newDoc);
+      saveDoc();
+      renderTodos();
+      markDirty();
+      scheduleSync(900);
+      if (message) toast(message);
+    }
+
+    function addTodoFromForm() {
+      const input = $('todoInput');
+      const text = input.value.trim();
+      if (!text) {
+        input.focus();
+        return;
+      }
+      const dateChoice = $('todoDate').value;
+      const timeValue = $('todoTime').value;
+      let remindDate = '';
+      if (timeValue && dateChoice) {
+        const target = new Date();
+        if (dateChoice === 'tomorrow') target.setDate(target.getDate() + 1);
+        remindDate = toIso(target).slice(0, 10);
+      } else if (timeValue && !dateChoice) {
+        remindDate = toIso(new Date()).slice(0, 10);
+      }
+      const next = protocol.addTodo(state.doc, {
+        text: text,
+        priority: $('todoPriority').value,
+        remind_at: timeValue || '',
+        remind_date: remindDate,
+      });
+      input.value = '';
+      $('todoTime').value = '';
+      $('todoDate').value = '';
+      applyDoc(next, '已添加，电脑端 30 秒内同步');
+    }
+
+    function toggleDone(todoId) {
+      const item = state.doc.todos.find((todo) => todo.id === todoId);
+      if (!item) return;
+      applyDoc(protocol.setDone(state.doc, todoId, !item.done), item.done ? '已恢复为未完成' : '已完成');
+    }
+
+    function deleteTodoById(todoId) {
+      applyDoc(protocol.deleteTodo(state.doc, todoId), '已删除');
+    }
+
+    function openEdit(todoId) {
+      const item = state.doc.todos.find((todo) => todo.id === todoId);
+      if (!item) return;
+      state.editingId = todoId;
+      $('editText').value = item.text;
+      $('editPriority').value = item.priority === protocol.PRIORITY_HIGH ? 'high' : 'normal';
+      $('editTime').value = item.remind_at || '';
+      if (item.remind_date) {
+        const today = toIso(new Date()).slice(0, 10);
+        const tomorrowDate = new Date();
+        tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+        const tomorrow = toIso(tomorrowDate).slice(0, 10);
+        $('editDate').value = item.remind_date === today ? 'today' : item.remind_date === tomorrow ? 'tomorrow' : '';
+      } else {
+        $('editDate').value = '';
+      }
+      $('editModal').classList.add('active');
+    }
+    function closeEdit() {
+      state.editingId = null;
+      $('editModal').classList.remove('active');
+    }
+    function saveEdit() {
+      const todoId = state.editingId;
+      if (!todoId) return;
+      const text = $('editText').value.trim();
+      if (!text) {
+        toast('内容不能为空', true);
+        return;
+      }
+      const dateChoice = $('editDate').value;
+      const timeValue = $('editTime').value;
+      let remindDate = '';
+      if (timeValue && dateChoice) {
+        const target = new Date();
+        if (dateChoice === 'tomorrow') target.setDate(target.getDate() + 1);
+        remindDate = toIso(target).slice(0, 10);
+      } else if (timeValue) {
+        remindDate = toIso(new Date()).slice(0, 10);
+      }
+      const next = protocol.updateTodo(state.doc, todoId, {
+        text: text,
+        priority: $('editPriority').value,
+        remind_at: timeValue || '',
+        remind_date: remindDate,
+      });
+      closeEdit();
+      applyDoc(next, '已保存修改');
+    }
+
+    function clearCompleted() {
+      const doneIds = state.doc.todos.filter((item) => item.done).map((item) => item.id);
+      if (!doneIds.length) {
+        toast('没有已完成的待办');
+        return;
+      }
+      if (!confirm('确定清除 ' + doneIds.length + ' 条已完成待办？')) return;
+      let next = state.doc;
+      doneIds.forEach((id) => {
+        next = protocol.deleteTodo(next, id);
+      });
+      applyDoc(next, '已清除已完成待办');
+    }
+
+    /* -------------------- 渲染 -------------------- */
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
+    function formatDoneAt(text) {
+      const date = parseIso(text);
+      if (!date) return '';
+      return pad2(date.getMonth() + 1) + '-' + pad2(date.getDate()) + ' ' + pad2(date.getHours()) + ':' + pad2(date.getMinutes());
+    }
+
+    function renderTodos() {
+      const list = $('todoList');
+      if (!list) return;
+      const todos = state.doc.todos;
+      const pendingCount = todos.filter((item) => !item.done).length;
+      $('count-pending').textContent = String(pendingCount);
+      $('count-all').textContent = String(todos.length);
+      $('count-done').textContent = String(todos.length - pendingCount);
+
+      let filtered;
+      if (state.filter === 'pending') filtered = todos.filter((item) => !item.done);
+      else if (state.filter === 'done') filtered = todos.filter((item) => item.done);
+      else filtered = todos.slice();
+
+      // 未完成：按紧急/提醒时间排序；已完成：最近的在前
+      if (state.filter === 'done') {
+        filtered.sort((a, b) => isoRank(b.done_at || b.updated_at) - isoRank(a.done_at || a.updated_at));
+      } else {
+        const order = new Map(protocol.pendingTodos(state.doc).map((item, index) => [item.id, index]));
+        filtered.sort((a, b) => (order.get(a.id) || 0) - (order.get(b.id) || 0));
+      }
+
+      if (!filtered.length) {
+        const emptyText = state.filter === 'pending' ? '暂无待办，添加一条试试 ✨' : state.filter === 'done' ? '还没有已完成的待办' : '还没有任何待办';
+        list.innerHTML = '<div class="empty">' + emptyText + '</div>';
+        updateSyncDetail();
+        return;
+      }
+
+      const now = new Date();
+      list.innerHTML = filtered
+        .map((item) => {
+          const high = item.priority === protocol.PRIORITY_HIGH;
+          const remindLabel = protocol.formatReminder(item, now);
+          const isOverdue = remindLabel && protocol.dueReminder(item, now);
+          const metaParts = [];
+          metaParts.push('<span class="badge ' + (high ? 'high' : 'normal') + '">' + (high ? '🔥 紧急' : '待办') + '</span>');
+          if (remindLabel) {
+            metaParts.push('<span class="remind' + (isOverdue ? ' overdue' : '') + '">⏰ ' + escapeHtml(remindLabel) + (item.notified_at ? ' · 已提醒' : '') + '</span>');
+          } else {
+            metaParts.push('<span>🔄 任务栏轮播</span>');
+          }
+          if (item.done && item.done_at) {
+            metaParts.push('<span>✅ ' + escapeHtml(formatDoneAt(item.done_at)) + '</span>');
+          }
+          return (
+            '<article class="todo-item' + (item.done ? ' done' : '') + (isOverdue && !item.done ? ' alerting' : '') + '" data-id="' + escapeHtml(item.id) + '">' +
+              '<button class="checkbox" type="button" data-action="toggle" data-id="' + escapeHtml(item.id) + '" aria-label="切换完成状态">' + (item.done ? '✓' : '') + '</button>' +
+              '<div class="todo-content">' +
+                '<div class="todo-title">' + escapeHtml(item.text) + '</div>' +
+                '<div class="todo-meta">' + metaParts.join('') + '</div>' +
+              '</div>' +
+              '<div class="item-actions">' +
+                '<button class="icon-btn" type="button" data-action="edit" data-id="' + escapeHtml(item.id) + '" aria-label="编辑">✏️</button>' +
+                '<button class="icon-btn" type="button" data-action="delete" data-id="' + escapeHtml(item.id) + '" aria-label="删除">✕</button>' +
+              '</div>' +
+            '</article>'
+          );
+        })
+        .join('');
+      updateSyncDetail();
+    }
+
+    function setFilter(filter) {
+      state.filter = filter;
+      document.querySelectorAll('.tab').forEach((element) => {
+        element.classList.toggle('active', element.dataset.filter === filter);
+      });
+      renderTodos();
+    }
+
+    function toggleConfigPanel(force) {
+      const panel = $('configPanel');
+      const shouldShow = force !== undefined ? force : !panel.classList.contains('active');
+      panel.classList.toggle('active', shouldShow);
+    }
+
+    /* -------------------- 事件绑定 -------------------- */
+    function bindEvents() {
+      $('statusPill').addEventListener('click', () => toggleConfigPanel());
+      $('hideConfigBtn').addEventListener('click', () => toggleConfigPanel(false));
+      $('saveConfigBtn').addEventListener('click', async () => {
+        state.config.token = $('ghToken').value.trim();
+        state.config.gistId = $('gistId').value.trim();
+        saveConfig();
+        toggleConfigPanel(false);
+        if (!isConfigured()) {
+          setStatus('idle', '未配置');
+          updateSyncDetail();
+          toast('已保存配置（尚未填写完整，暂不同步）');
+          return;
+        }
+        state.etag = null;
+        state.remoteDoc = null;
+        await syncNow('保存配置');
+      });
+      $('createGistBtn').addEventListener('click', async () => {
+        const token = $('ghToken').value.trim();
+        if (!token) {
+          toast('请先填写 GitHub Token', true);
+          return;
+        }
+        if ($('gistId').value.trim()) {
+          if (!confirm('当前已填写 Gist ID，仍要创建一个新的私密 Gist 吗？创建后手机/电脑都要换用新 ID。')) return;
+        }
+        try {
+          setStatus('busy', '创建中…');
+          state.config.token = token;
+          const gistId = await createGist();
+          state.config.gistId = gistId;
+          saveConfig();
+          $('gistId').value = gistId;
+          state.etag = null;
+          state.remoteDoc = null;
+          setStatus('ok', '已连接');
+          toast('创建成功，Gist ID 已填好，请到电脑端填入同一 ID');
+        } catch (error) {
+          setStatus('error', '创建失败');
+          toast(error.message, true);
+        }
+      });
+      $('syncNowBtn').addEventListener('click', () => syncNow('手动'));
+      $('addBtn').addEventListener('click', addTodoFromForm);
+      $('todoInput').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') addTodoFromForm();
+      });
+      $('tabs').addEventListener('click', (event) => {
+        const tab = event.target.closest('.tab');
+        if (tab) setFilter(tab.dataset.filter);
+      });
+      $('todoList').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-action]');
+        if (!button) return;
+        const id = button.dataset.id;
+        const action = button.dataset.action;
+        if (action === 'toggle') toggleDone(id);
+        else if (action === 'edit') openEdit(id);
+        else if (action === 'delete') {
+          if (confirm('删除这条待办？（会同步删除电脑端的对应条目）')) deleteTodoById(id);
+        }
+      });
+      $('clearDoneBtn').addEventListener('click', clearCompleted);
+      $('editCancelBtn').addEventListener('click', closeEdit);
+      $('editSaveBtn').addEventListener('click', saveEdit);
+      $('editModal').addEventListener('click', (event) => {
+        if (event.target === $('editModal')) closeEdit();
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden && isConfigured()) syncNow('回到前台');
+      });
+      window.addEventListener('focus', () => {
+        if (isConfigured()) syncNow('窗口聚焦');
+      });
+      window.addEventListener('online', () => {
+        if (isConfigured()) syncNow('网络恢复');
+      });
+    }
+
+    function registerServiceWorker() {
+      if (!('serviceWorker' in navigator)) return;
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(() => {
+          /* 离线支持失败不影响主功能 */
+        });
+      });
+    }
+
+    function initApp() {
+      loadState();
+      bindEvents();
+      renderTodos();
+      if (isConfigured()) {
+        setStatus('busy', '连接中…');
+        syncNow('启动');
+      } else {
+        setStatus('idle', '未配置');
+        toggleConfigPanel(true);
+      }
+      // 定时同步始终注册：用户中途才配置 Gist 也能自动同步
+      setInterval(() => {
+        if (!document.hidden && isConfigured()) syncNow('定时');
+      }, SYNC_INTERVAL_MS);
+      registerServiceWorker();
+    }
+  })();
+  </script>
+</body>
+</html>
