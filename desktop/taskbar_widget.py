@@ -92,7 +92,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.3"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -123,6 +123,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "comment_rotate_sec": 20,  # 有意思的热评之间的轮播间隔（秒）
     "sync_sec": 30,            # 云端同步间隔（秒）
     "show_tray": True,
+    "hide_on_fullscreen": True,    # B站/网页视频全屏、全屏游戏时自动隐藏
     "daily_fill_reminder": True,   # 每天 22:00 提醒填明天的待办
     "last_fill_reminded": "",      # 最近一次已提醒的“展示日”，避免重复弹
 }
@@ -289,6 +290,15 @@ class _BitmapInfo(ctypes.Structure):
     _fields_ = [("bmiHeader", _BitmapInfoHeader), ("bmiColors", wintypes.DWORD * 3)]
 
 
+class _MonitorInfo(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", wintypes.RECT),
+        ("rcWork", wintypes.RECT),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+
 class Win32Taskbar:
     """任务栏 Win32 操作：定位、托盘区、明暗主题、嵌入/还原窗口。
 
@@ -330,6 +340,16 @@ class Win32Taskbar:
         _user32.ReleaseDC.restype = ctypes.c_int
         _gdi32.GetPixel.argtypes = [wintypes.HDC, ctypes.c_int, ctypes.c_int]
         _gdi32.GetPixel.restype = wintypes.DWORD
+        # 全屏检测
+        _user32.GetForegroundWindow.restype = wintypes.HWND
+        _user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+        _user32.MonitorFromWindow.restype = ctypes.c_void_p
+        _user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MonitorInfo)]
+        _user32.GetMonitorInfoW.restype = wintypes.BOOL
+        _user32.IsIconic.argtypes = [wintypes.HWND]
+        _user32.IsIconic.restype = wintypes.BOOL
+        _user32.IsWindowVisible.argtypes = [wintypes.HWND]
+        _user32.IsWindowVisible.restype = wintypes.BOOL
     except AttributeError:  # pragma: no cover - 极端精简系统
         pass
     # GDI 截图：一次 BitBlt 抓取整条任务栏，避免逐像素 GetPixel 太慢卡住 UI
@@ -398,6 +418,75 @@ class Win32Taskbar:
             return int(point.x), int(point.y)
         except Exception:  # noqa: BLE001
             return 0, 0
+
+    # -- 全屏检测 ---------------------------------------------------------
+    @classmethod
+    def class_name(cls, hwnd: int) -> str:
+        try:
+            buffer = ctypes.create_unicode_buffer(256)
+            cls._user32.GetClassNameW(wintypes.HWND(hwnd), buffer, 256)
+            return buffer.value
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @classmethod
+    def foreground_window(cls) -> int:
+        try:
+            return int(cls._user32.GetForegroundWindow() or 0)
+        except Exception:  # noqa: BLE001
+            return 0
+
+    @classmethod
+    def monitor_rect(cls, hwnd: int) -> Optional[Tuple[int, int, int, int]]:
+        try:
+            monitor = cls._user32.MonitorFromWindow(wintypes.HWND(hwnd), 2)  # NEAREST
+            if not monitor:
+                return None
+            info = _MonitorInfo()
+            info.cbSize = ctypes.sizeof(_MonitorInfo)
+            if not cls._user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                return None
+            rect = info.rcMonitor
+            return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
+        except Exception:  # noqa: BLE001
+            return None
+
+    @classmethod
+    def shell_d3d_fullscreen(cls) -> bool:
+        """Windows 自带的“当前是否全屏 D3D 应用”检测（游戏常见）。"""
+        try:
+            shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+            state = ctypes.c_int(0)
+            result = shell32.SHQueryUserNotificationState(ctypes.byref(state))
+            return result == 0 and state.value == 3  # QUNS_RUNNING_D3D_FULL_SCREEN
+        except Exception:  # noqa: BLE001
+            return False
+
+    @classmethod
+    def is_foreground_fullscreen(cls, exclude_hwnd: int = 0) -> bool:
+        """前台窗口是否全屏：浏览器 F11、网页视频全屏、全屏游戏都会覆盖整个显示器。"""
+        hwnd = cls.foreground_window()
+        if not hwnd or hwnd == exclude_hwnd:
+            return False
+        if cls.class_name(hwnd) in (
+            "Shell_TrayWnd",
+            "Progman",
+            "WorkerW",
+            "Windows.UI.Core.CoreWindow",
+        ):
+            return False
+        try:
+            if cls._user32.IsIconic(wintypes.HWND(hwnd)) or not cls._user32.IsWindowVisible(
+                wintypes.HWND(hwnd)
+            ):
+                return False
+        except Exception:  # noqa: BLE001
+            pass
+        window_rect = cls.rect(hwnd)
+        monitor = cls.monitor_rect(hwnd)
+        if window_rect is None or monitor is None:
+            return False
+        return core.rect_covers_monitor(window_rect, monitor, tolerance=2) or cls.shell_d3d_fullscreen()
 
     @classmethod
     def _child_by_class(cls, parent: int, class_name: str) -> int:
@@ -1096,6 +1185,8 @@ class TaskbarWidget(QWidget):
         self._bg_image: Optional[QImage] = None
         self._force_clean_rescan = False
         self._hidden_for_space = False
+        self._hidden_for_fullscreen = False
+        self._user_hidden = False
 
         # 拖拽状态
         self._drag_offset = None
@@ -1570,6 +1661,11 @@ class TaskbarWidget(QWidget):
         self.daily_timer.timeout.connect(self._check_daily_events)
         self.daily_timer.start(30000)
 
+        # 全屏应用（B站/网页视频 F11、全屏游戏）时自动隐藏，退出后恢复
+        self.fullscreen_timer = QTimer(self)
+        self.fullscreen_timer.timeout.connect(self._check_fullscreen_state)
+        self.fullscreen_timer.start(1000)
+
         try:
             app = QGuiApplication.instance()
             if app is not None:
@@ -1857,6 +1953,43 @@ class TaskbarWidget(QWidget):
             )
         self.refresh_texts()
 
+    # ==================== 全屏应用自动隐藏 ====================
+    def _check_fullscreen_state(self) -> None:
+        """B 站/网页视频全屏（F11）或全屏游戏时自动隐藏，退出全屏后恢复。"""
+        if self.selftest or self._dragging:
+            return
+        if not bool(self.config.get("hide_on_fullscreen", True)):
+            if self._hidden_for_fullscreen:
+                self._restore_from_fullscreen()
+            return
+        fullscreen = Win32Taskbar.is_foreground_fullscreen(int(self.winId()))
+        if fullscreen and not self._hidden_for_fullscreen:
+            LOGGER.info("检测到全屏应用，暂时隐藏任务栏组件")
+            self._hidden_for_fullscreen = True
+            if not self._user_hidden:
+                self.hide()
+        elif not fullscreen and self._hidden_for_fullscreen:
+            self._restore_from_fullscreen()
+
+    def _restore_from_fullscreen(self) -> None:
+        self._hidden_for_fullscreen = False
+        if self._user_hidden:
+            return
+        LOGGER.info("退出全屏，恢复任务栏组件")
+        self.show()
+        self._force_clean_rescan = True
+        self.apply_taskbar_mode()
+        self.refresh_texts()
+
+    def toggle_hide_on_fullscreen(self) -> None:
+        enabled = not bool(self.config.get("hide_on_fullscreen", True))
+        self.config["hide_on_fullscreen"] = enabled
+        save_config(self.config)
+        LOGGER.info("全屏应用时自动隐藏：%s", "开" if enabled else "关")
+        if not enabled:
+            self._restore_from_fullscreen()
+        self.refresh_texts()
+
     def _update_tray_tooltip(self) -> None:
         if self._tray is None:
             return
@@ -2134,6 +2267,7 @@ class TaskbarWidget(QWidget):
         if self._tray is not None:
             # 有托盘时关闭窗口 = 隐藏到托盘，继续在任务栏常驻
             event.ignore()
+            self._user_hidden = True
             self.hide()
             return
         # 没有托盘图标时，关闭窗口就是退出，避免留下看不见的“僵尸进程”
@@ -2205,6 +2339,11 @@ class TaskbarWidget(QWidget):
         daily_action.setChecked(bool(self.config.get("daily_fill_reminder", True)))
         daily_action.triggered.connect(self.toggle_daily_fill_reminder)
         menu.addAction(daily_action)
+        fullscreen_action = QAction("🖥️ 全屏应用时自动隐藏", menu)
+        fullscreen_action.setCheckable(True)
+        fullscreen_action.setChecked(bool(self.config.get("hide_on_fullscreen", True)))
+        fullscreen_action.triggered.connect(self.toggle_hide_on_fullscreen)
+        menu.addAction(fullscreen_action)
         menu.addSeparator()
         menu.addAction("🔄 立即同步", self.request_sync)
         menu.addAction("⚙️ 配置 GitHub Gist 云同步", self.open_settings)
@@ -2314,6 +2453,11 @@ class TaskbarWidget(QWidget):
         daily_tray_action.setChecked(bool(self.config.get("daily_fill_reminder", True)))
         daily_tray_action.triggered.connect(self.toggle_daily_fill_reminder)
         tray_menu.addAction(daily_tray_action)
+        fullscreen_tray_action = QAction("🖥️ 全屏应用时自动隐藏", tray_menu)
+        fullscreen_tray_action.setCheckable(True)
+        fullscreen_tray_action.setChecked(bool(self.config.get("hide_on_fullscreen", True)))
+        fullscreen_tray_action.triggered.connect(self.toggle_hide_on_fullscreen)
+        tray_menu.addAction(fullscreen_tray_action)
         tray_menu.addAction("⚙️ 配置同步", self.open_settings)
         tray_menu.addSeparator()
         tray_menu.addAction("退出", QApplication.quit)
@@ -2357,8 +2501,11 @@ class TaskbarWidget(QWidget):
 
     def toggle_visibility(self) -> None:
         if self.isVisible():
+            self._user_hidden = True
             self.hide()
         else:
+            self._user_hidden = False
+            self._hidden_for_fullscreen = False
             self.show()
             QTimer.singleShot(0, self.apply_taskbar_mode)
             self.refresh_texts()

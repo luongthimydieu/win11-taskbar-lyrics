@@ -110,6 +110,30 @@ def iso_rank(text: Any) -> float:
     return value.timestamp() if value else 0.0
 
 
+def rect_covers_monitor(
+    window_rect: Any, monitor_rect: Any, tolerance: int = 2
+) -> bool:
+    """窗口矩形是否覆盖整个显示器（用于判断“全屏应用”）。
+
+    参数都是 ``(left, top, right, bottom)``；容差用来容忍 DWM 的 1–2px 边框。
+    """
+    try:
+        left, top, right, bottom = (int(value) for value in window_rect)
+        monitor_left, monitor_top, monitor_right, monitor_bottom = (
+            int(value) for value in monitor_rect
+        )
+    except (TypeError, ValueError):
+        return False
+    if right <= left or bottom <= top:
+        return False
+    return (
+        left <= monitor_left + tolerance
+        and top <= monitor_top + tolerance
+        and right >= monitor_right - tolerance
+        and bottom >= monitor_bottom - tolerance
+    )
+
+
 # ---------------------------------------------------------------------------
 # 每日待办：22:00 填“明天”，凌晨 2:00 自动翻篇
 # ---------------------------------------------------------------------------

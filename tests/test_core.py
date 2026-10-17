@@ -674,5 +674,24 @@ class DailyTodoTests(unittest.TestCase):
         self.assertNotIn("下一项", line)
 
 
+class FullscreenDetectionTests(unittest.TestCase):
+    """全屏应用检测：窗口矩形是否覆盖显示器。"""
+
+    def test_exact_fullscreen(self):
+        self.assertTrue(core.rect_covers_monitor((0, 0, 1920, 1080), (0, 0, 1920, 1080)))
+
+    def test_tolerates_small_border(self):
+        self.assertTrue(core.rect_covers_monitor((-1, 0, 1921, 1079), (0, 0, 1920, 1080)))
+        self.assertTrue(core.rect_covers_monitor((2, 2, 1918, 1078), (0, 0, 1920, 1080)))
+
+    def test_windowed_not_fullscreen(self):
+        self.assertFalse(core.rect_covers_monitor((100, 100, 1300, 800), (0, 0, 1920, 1080)))
+        self.assertFalse(core.rect_covers_monitor((0, 0, 1920, 1000), (0, 0, 1920, 1080)))
+
+    def test_invalid_rect(self):
+        self.assertFalse(core.rect_covers_monitor(None, (0, 0, 1920, 1080)))
+        self.assertFalse(core.rect_covers_monitor((0, 0, 0, 0), (0, 0, 1920, 1080)))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
