@@ -25,9 +25,9 @@
 ## 文件校验
 
 - 打包版本：v1.2.2
-- 发布文件：`Win11TaskbarLyrics-v1.2.2-onedir.zip`
-- SHA256：见 Release 页面附件旁的说明或本文件所在目录的 `SHA256SUMS.txt`
-- 目录大小：约 141 MB（压缩后约 60–70 MB）；内存占用约 150–160 MB 工作集
+- 发布文件：`Win11TaskbarLyrics-v1.2.2-onedir.zip`（52.8 MB 压缩包，解压后约 141 MB）
+- SHA256：`181F3960B43C092F0A6DF927240C4D04D83C29F98FF1B57FC8DBFBDD7D04D0A8`
+- 目录大小：约 141 MB（压缩后 52.8 MB）；内存占用约 150–160 MB 工作集
 - 需要 Windows 11 x64；无需安装 Python / Anaconda
 
 ## 已知边界
