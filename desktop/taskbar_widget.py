@@ -92,7 +92,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.2.7"
+APP_VERSION = "1.2.8"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -112,6 +112,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "config_version": 4,
     "gh_token": "",
     "gist_id": "",
+    "github_direct": True,     # api.github.com 直连（绕过系统代理），避免代理抖动导致同步失败
     "offset_ratio": 0.0,       # 0=自动；拖拽后保存为相对任务栏宽度的比例
     "auto_anchor": True,       # True=自动贴到托盘区左侧的空位
     "width": DEFAULT_WIDTH,
@@ -186,6 +187,40 @@ def find_logo_file() -> Optional[Path]:
     return None
 
 
+def _add_no_proxy_hosts(hosts: Tuple[str, ...]) -> None:
+    """把指定域名加入 NO_PROXY，让 requests 对这些域名绕过系统代理。"""
+    for key in ("NO_PROXY", "no_proxy"):
+        current = [part.strip() for part in os.environ.get(key, "").split(",") if part.strip()]
+        for host in hosts:
+            if host not in current:
+                current.append(host)
+        os.environ[key] = ",".join(current)
+
+
+def _remove_no_proxy_hosts(hosts: Tuple[str, ...]) -> None:
+    for key in ("NO_PROXY", "no_proxy"):
+        current = [
+            part.strip()
+            for part in os.environ.get(key, "").split(",")
+            if part.strip() and part.strip() not in hosts
+        ]
+        if current:
+            os.environ[key] = ",".join(current)
+        else:
+            os.environ.pop(key, None)
+
+
+def apply_github_direct_env(config: Dict[str, Any]) -> None:
+    """按配置设置 GitHub API 直连（默认只对 api.github.com 绕过代理）。
+
+    Clash/代理软件偶尔重启或线路抖动时，requests 会收到 ProxyError；
+    api.github.com 在国内通常可以直连，固定走直连能显著减少同步失败。
+    """
+    if bool(config.get("github_direct", True)):
+        _add_no_proxy_hosts(("api.github.com",))
+        LOGGER.info("GitHub API 直连已启用（api.github.com 已加入 NO_PROXY，绕过系统代理）")
+
+
 def load_config() -> Dict[str, Any]:
     config = dict(DEFAULT_CONFIG)
     migrated = False
@@ -215,6 +250,7 @@ def load_config() -> Dict[str, Any]:
     if migrated:
         LOGGER.info("检测到旧版配置，已迁移为 v1.2 布局（Token / Gist ID 保留）")
         save_config(config)
+    apply_github_direct_env(config)
     return config
 
 
@@ -2185,6 +2221,26 @@ class TaskbarWidget(QWidget):
             self._restore_from_fullscreen()
         self.refresh_texts()
 
+    def toggle_github_direct(self) -> None:
+        enabled = not bool(self.config.get("github_direct", True))
+        self.config["github_direct"] = enabled
+        save_config(self.config)
+        if enabled:
+            _add_no_proxy_hosts(("api.github.com",))
+        else:
+            _remove_no_proxy_hosts(("api.github.com",))
+        LOGGER.info("GitHub API 直连（绕过代理）：%s", "开" if enabled else "关")
+        if self._tray is not None:
+            self._tray.showMessage(
+                APP_TITLE,
+                "已开启：api.github.com 直连，不再受代理抖动影响"
+                if enabled
+                else "已关闭：GitHub 同步重新走系统代理",
+                QSystemTrayIcon.MessageIcon.Information,
+                4000,
+            )
+        self.request_sync()
+
     def _update_tray_tooltip(self) -> None:
         if self._tray is None:
             return
@@ -2273,32 +2329,44 @@ class TaskbarWidget(QWidget):
 
     def _sync_worker(self, local_doc: Dict[str, Any], etag: Optional[str]) -> None:
         assert self.store is not None
-        try:
-            report = self.store.sync(local_doc, etag)
-            self.bridge.sync_finished.emit(
-                {
-                    "ok": True,
-                    "status": report.status,
-                    "doc": report.doc,
-                    "remote": report.remote,
-                    "pushed": report.pushed,
-                    "etag": report.etag,
-                    "error": "",
-                }
-            )
-        except core.GitHubApiError as exc:
-            self.bridge.sync_finished.emit(
-                {"ok": False, "status": "error", "error": str(exc), "code": exc.status}
-            )
-        except requests.RequestException as exc:
-            self.bridge.sync_finished.emit(
-                {"ok": False, "status": "error", "error": f"网络错误：{exc}", "code": None}
-            )
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.exception("同步线程异常")
-            self.bridge.sync_finished.emit(
-                {"ok": False, "status": "error", "error": str(exc), "code": None}
-            )
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                report = self.store.sync(local_doc, etag)
+                self.bridge.sync_finished.emit(
+                    {
+                        "ok": True,
+                        "status": report.status,
+                        "doc": report.doc,
+                        "remote": report.remote,
+                        "pushed": report.pushed,
+                        "etag": report.etag,
+                        "error": "",
+                    }
+                )
+                return
+            except core.GitHubApiError as exc:
+                self.bridge.sync_finished.emit(
+                    {"ok": False, "status": "error", "error": str(exc), "code": exc.status}
+                )
+                return
+            except requests.RequestException as exc:
+                # 代理抖动/网络瞬断：同一轮里立刻重试一次，再失败才报错等下一轮
+                if attempt < 2:
+                    LOGGER.info("云同步网络错误，2 秒后重试一次：%s", exc)
+                    time.sleep(2)
+                    continue
+                self.bridge.sync_finished.emit(
+                    {"ok": False, "status": "error", "error": f"网络错误：{exc}", "code": None}
+                )
+                return
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("同步线程异常")
+                self.bridge.sync_finished.emit(
+                    {"ok": False, "status": "error", "error": str(exc), "code": None}
+                )
+                return
 
     def on_sync_finished(self, result: Dict[str, Any]) -> None:
         self._sync_running = False
@@ -2539,6 +2607,11 @@ class TaskbarWidget(QWidget):
         fullscreen_action.setChecked(bool(self.config.get("hide_on_fullscreen", True)))
         fullscreen_action.triggered.connect(self.toggle_hide_on_fullscreen)
         menu.addAction(fullscreen_action)
+        direct_action = QAction("🌐 GitHub API 直连（绕过代理）", menu)
+        direct_action.setCheckable(True)
+        direct_action.setChecked(bool(self.config.get("github_direct", True)))
+        direct_action.triggered.connect(self.toggle_github_direct)
+        menu.addAction(direct_action)
         menu.addSeparator()
         menu.addAction("🔄 立即同步", self.request_sync)
         menu.addAction("⚙️ 配置 GitHub Gist 云同步", self.open_settings)
@@ -2653,6 +2726,11 @@ class TaskbarWidget(QWidget):
         fullscreen_tray_action.setChecked(bool(self.config.get("hide_on_fullscreen", True)))
         fullscreen_tray_action.triggered.connect(self.toggle_hide_on_fullscreen)
         tray_menu.addAction(fullscreen_tray_action)
+        direct_tray_action = QAction("🌐 GitHub API 直连（绕过代理）", tray_menu)
+        direct_tray_action.setCheckable(True)
+        direct_tray_action.setChecked(bool(self.config.get("github_direct", True)))
+        direct_tray_action.triggered.connect(self.toggle_github_direct)
+        tray_menu.addAction(direct_tray_action)
         tray_menu.addAction("⚙️ 配置同步", self.open_settings)
         tray_menu.addSeparator()
         tray_menu.addAction("退出", QApplication.quit)
