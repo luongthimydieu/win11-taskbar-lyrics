@@ -605,5 +605,74 @@ class CommentSelectionTests(unittest.TestCase):
         self.assertEqual(core.NetEaseClient._format_likes(999), "999")
 
 
+class DailyTodoTests(unittest.TestCase):
+    """每天 22:00 填“明天”、凌晨 2:00 自动翻篇的日期规则。"""
+
+    def _moment(self, text: str) -> _dt.datetime:
+        value = core.parse_iso(text)
+        self.assertIsNotNone(value)
+        return value  # type: ignore[return-value]
+
+    def test_current_day_rolls_at_2am(self):
+        self.assertEqual(core.current_day(self._moment("2026-10-18T01:30:00+08:00")), _dt.date(2026, 10, 17))
+        self.assertEqual(core.current_day(self._moment("2026-10-18T02:00:00+08:00")), _dt.date(2026, 10, 18))
+        self.assertEqual(core.current_day(self._moment("2026-10-18T21:59:00+08:00")), _dt.date(2026, 10, 18))
+
+    def test_target_day_evening_belongs_to_tomorrow(self):
+        self.assertEqual(core.target_day(self._moment("2026-10-17T21:59:00+08:00")), _dt.date(2026, 10, 17))
+        self.assertEqual(core.target_day(self._moment("2026-10-17T22:00:00+08:00")), _dt.date(2026, 10, 18))
+        self.assertEqual(core.target_day(self._moment("2026-10-18T01:30:00+08:00")), _dt.date(2026, 10, 18))
+
+    def test_todo_day_derived_from_created_at(self):
+        morning = make_todo("a", "上午填的", created_at="2026-10-17T10:00:00+08:00")
+        evening = make_todo("b", "晚上填的", created_at="2026-10-17T22:30:00+08:00")
+        self.assertEqual(core.todo_day(morning), _dt.date(2026, 10, 17))
+        self.assertEqual(core.todo_day(evening), _dt.date(2026, 10, 18))
+
+    def test_next_todo_for_day_filters_tomorrow_tasks(self):
+        doc = make_doc(
+            make_todo("today", "今天的", created_at="2026-10-18T08:00:00+08:00"),
+            make_todo("tomorrow", "明天填的", created_at="2026-10-18T22:30:00+08:00"),
+        )
+        day = _dt.date(2026, 10, 18)
+        today_items = core.todos_for_day(doc, day)
+        self.assertEqual([item["id"] for item in today_items], ["today"])
+        self.assertEqual(core.next_todo_for_day(doc, day)["id"], "today")
+        # 第二天的任务要到 2:00 之后才算“今天”
+        self.assertEqual(
+            [item["id"] for item in core.todos_for_day(doc, _dt.date(2026, 10, 19))], ["tomorrow"]
+        )
+
+    def test_next_todo_for_day_falls_back_to_overdue(self):
+        doc = make_doc(make_todo("old", "昨天没做完", created_at="2026-10-16T09:00:00+08:00"))
+        picked = core.next_todo_for_day(doc, _dt.date(2026, 10, 18))
+        self.assertIsNotNone(picked)
+        self.assertEqual(picked["id"], "old")
+        self.assertEqual(core.todos_for_day(doc, _dt.date(2026, 10, 18)), [])
+
+    def test_fill_reminder_needed(self):
+        empty = make_doc()
+        evening = self._moment("2026-10-17T22:05:00+08:00")
+        early = self._moment("2026-10-18T01:30:00+08:00")
+        day = self._moment("2026-10-18T10:00:00+08:00")
+        self.assertTrue(core.fill_reminder_needed(empty, evening))
+        self.assertTrue(core.fill_reminder_needed(empty, early))
+        self.assertFalse(core.fill_reminder_needed(empty, day))
+        filled = make_doc(make_todo("t", "明天的任务", created_at="2026-10-17T22:30:00+08:00"))
+        self.assertFalse(core.fill_reminder_needed(filled, evening))
+
+    def test_day_text(self):
+        today = _dt.date(2026, 10, 17)
+        self.assertEqual(core.day_text(today, today), "今天")
+        self.assertEqual(core.day_text(today + _dt.timedelta(days=1), today), "明天")
+        self.assertEqual(core.day_text(today + _dt.timedelta(days=3), today), "10-20")
+
+    def test_format_next_todo_line_with_overdue_lead(self):
+        todo = make_todo("t1", "交周报")
+        line = core.format_next_todo_line(todo, 2, lead="逾期")
+        self.assertIn("逾期", line)
+        self.assertNotIn("下一项", line)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

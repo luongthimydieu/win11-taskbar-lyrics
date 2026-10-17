@@ -121,6 +121,12 @@
     }
     .icon-btn:hover { background: rgba(148, 163, 184, 0.12); color: var(--text); }
     .empty { text-align: center; color: var(--muted); padding: 34px 16px; font-size: 0.86rem; }
+    .daily-tip {
+      display: none; margin: 12px 0 0; padding: 11px 14px; border-radius: 14px; font-size: 0.82rem;
+      border: 1px solid rgba(56, 189, 248, 0.35); background: rgba(56, 189, 248, 0.10); color: #bae6fd;
+      line-height: 1.45;
+    }
+    .daily-tip.show { display: block; }
 
     .footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 14px; font-size: 0.72rem; color: var(--muted); }
     .footer button { padding: 8px 12px; font-size: 0.78rem; }
@@ -197,6 +203,9 @@
         <button type="button" id="addBtn">+ 添加</button>
       </div>
     </div>
+    <p class="hint" style="margin-top:9px;">
+      ⏰ 22:00 之后添加的待办会自动算到「明天」，凌晨 2:00 起出现在电脑任务栏；每天 22:00 电脑端也会提醒你填明天的待办。
+    </p>
   </section>
 
   <!-- 筛选标签 -->
@@ -205,6 +214,8 @@
     <div class="tab" data-filter="all" role="button" tabindex="0">全部 (<span id="count-all">0</span>)</div>
     <div class="tab" data-filter="done" role="button" tabindex="0">已完成 (<span id="count-done">0</span>)</div>
   </nav>
+
+  <div class="daily-tip" id="dailyTip"></div>
 
   <main class="todo-list" id="todoList"></main>
 
@@ -261,6 +272,8 @@
     const PRIORITY_NORMAL = 'normal';
     const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const DAY_ROLLOVER_HOUR = 2; // 凌晨 2 点翻篇
+    const FILL_REMIND_HOUR = 22; // 晚上 10 点提醒填明天的待办
 
     const pad2 = (value) => String(value).padStart(2, '0');
 
@@ -587,6 +600,47 @@
       });
     }
 
+    // -------------------- 每日节奏（与 core.py 保持一致） --------------------
+    function dateOnly(value) {
+      const date = value ? new Date(value) : new Date();
+      return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    }
+    function currentDay(moment) {
+      const now = moment ? new Date(moment) : new Date();
+      const day = dateOnly(now);
+      if (now.getHours() < DAY_ROLLOVER_HOUR) day.setDate(day.getDate() - 1);
+      return day;
+    }
+    function targetDay(moment) {
+      const now = moment ? new Date(moment) : new Date();
+      const day = dateOnly(now);
+      if (now.getHours() >= FILL_REMIND_HOUR) day.setDate(day.getDate() + 1);
+      return day;
+    }
+    function todoDay(todo) {
+      const created = parseIso(todo && todo.created_at) || new Date();
+      return targetDay(created);
+    }
+    function dayText(day, today) {
+      const base = today || currentDay();
+      const diff = Math.round((dateOnly(day).getTime() - dateOnly(base).getTime()) / 86400000);
+      if (diff === 0) return '今天';
+      if (diff === 1) return '明天';
+      return pad2(day.getMonth() + 1) + '-' + pad2(day.getDate());
+    }
+    function inFillWindow(moment) {
+      const now = moment ? new Date(moment) : new Date();
+      return now.getHours() >= FILL_REMIND_HOUR || now.getHours() < DAY_ROLLOVER_HOUR;
+    }
+    function fillReminderNeeded(doc, moment) {
+      if (!inFillWindow(moment)) return false;
+      const now = moment ? new Date(moment) : new Date();
+      const tomorrow = currentDay(now);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const stamp = tomorrow.getTime();
+      return !normalizeDoc(doc).todos.some((item) => !item.done && todoDay(item).getTime() === stamp);
+    }
+
     const protocol = {
       SCHEMA_VERSION: SCHEMA_VERSION,
       GIST_FILENAME: GIST_FILENAME,
@@ -613,6 +667,12 @@
       reminderDatetime: reminderDatetime,
       dueReminder: dueReminder,
       formatReminder: formatReminder,
+      currentDay: currentDay,
+      targetDay: targetDay,
+      todoDay: todoDay,
+      dayText: dayText,
+      inFillWindow: inFillWindow,
+      fillReminderNeeded: fillReminderNeeded,
     };
 
     if (typeof window !== 'undefined') {
@@ -1024,6 +1084,21 @@
       $('count-all').textContent = String(todos.length);
       $('count-done').textContent = String(todos.length - pendingCount);
 
+      const renderNow = new Date();
+      const todayDay = protocol.currentDay(renderNow);
+      const tip = $('dailyTip');
+      if (tip) {
+        if (protocol.fillReminderNeeded(state.doc, renderNow)) {
+          const tomorrow = new Date(todayDay.getFullYear(), todayDay.getMonth(), todayDay.getDate() + 1);
+          tip.textContent =
+            '📝 明天的待办还没填（' + pad2(tomorrow.getMonth() + 1) + '-' + pad2(tomorrow.getDate()) +
+            '），今晚先加几条吧～';
+          tip.classList.add('show');
+        } else {
+          tip.classList.remove('show');
+        }
+      }
+
       let filtered;
       if (state.filter === 'pending') filtered = todos.filter((item) => !item.done);
       else if (state.filter === 'done') filtered = todos.filter((item) => item.done);
@@ -1052,6 +1127,14 @@
           const isOverdue = remindLabel && protocol.dueReminder(item, now);
           const metaParts = [];
           metaParts.push('<span class="badge ' + (high ? 'high' : 'normal') + '">' + (high ? '🔥 紧急' : '待办') + '</span>');
+          if (!item.done) {
+            const itemDay = protocol.todoDay(item);
+            if (itemDay.getTime() > todayDay.getTime()) {
+              metaParts.push('<span>📅 ' + escapeHtml(protocol.dayText(itemDay, todayDay)) + '</span>');
+            } else if (itemDay.getTime() < todayDay.getTime()) {
+              metaParts.push('<span class="remind overdue">⏳ 逾期</span>');
+            }
+          }
           if (remindLabel) {
             metaParts.push('<span class="remind' + (isOverdue ? ' overdue' : '') + '">⏰ ' + escapeHtml(remindLabel) + (item.notified_at ? ' · 已提醒' : '') + '</span>');
           } else {
@@ -1197,6 +1280,8 @@
       setInterval(() => {
         if (!document.hidden && isConfigured()) syncNow('定时');
       }, SYNC_INTERVAL_MS);
+      // 每分钟刷新一次“该填明天待办”的提示（只重绘，不发请求）
+      setInterval(renderTodos, 60000);
       registerServiceWorker();
     }
   })();

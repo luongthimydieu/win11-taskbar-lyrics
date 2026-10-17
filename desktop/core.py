@@ -60,6 +60,11 @@ _EPOCH_ISO = "1970-01-01T00:00:00+00:00"
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
+#: 凌晨几点“翻篇”：0:00–1:59 仍算前一天，2:00 起算新的一天
+DAY_ROLLOVER_HOUR = 2
+#: 晚上几点开始提醒“填写明天的待办”
+FILL_REMIND_HOUR = 22
+
 
 # ---------------------------------------------------------------------------
 # 时间工具（所有落盘时间统一 ISO8601 + 时区偏移，秒级精度）
@@ -103,6 +108,106 @@ def iso_rank(text: Any) -> float:
     """把时间字符串转成可比较的秒级浮点；无法解析视为 0（最旧）。"""
     value = parse_iso(text)
     return value.timestamp() if value else 0.0
+
+
+# ---------------------------------------------------------------------------
+# 每日待办：22:00 填“明天”，凌晨 2:00 自动翻篇
+# ---------------------------------------------------------------------------
+
+def current_day(
+    moment: Optional[_dt.datetime] = None, rollover_hour: int = DAY_ROLLOVER_HOUR
+) -> _dt.date:
+    """任务栏当前展示的“今天”。
+
+    凌晨 0:00–1:59 仍算前一天：这样晚上填的“明天待办”会在凌晨 2:00 才翻出来，
+    避免半夜 0 点一过就提前切走。
+    """
+    value = moment or now_local()
+    if value.tzinfo is None:
+        value = value.astimezone()
+    if value.hour < rollover_hour:
+        return (value - _dt.timedelta(days=1)).date()
+    return value.date()
+
+
+def target_day(
+    moment: Optional[_dt.datetime] = None, fill_hour: int = FILL_REMIND_HOUR
+) -> _dt.date:
+    """现在创建/填写的待办归属于哪一天：22:00 之后填的算“明天”。"""
+    value = moment or now_local()
+    if value.tzinfo is None:
+        value = value.astimezone()
+    if value.hour >= fill_hour:
+        return (value + _dt.timedelta(days=1)).date()
+    return value.date()
+
+
+def todo_day(todo: Dict[str, Any], fill_hour: int = FILL_REMIND_HOUR) -> _dt.date:
+    """一条待办归属的日期：按创建时间套用 target_day 规则。"""
+    created = parse_iso(todo.get("created_at")) if isinstance(todo, dict) else None
+    return target_day(created or now_local(), fill_hour)
+
+
+def day_text(day: _dt.date, today: Optional[_dt.date] = None) -> str:
+    """日期标签：今天 / 明天 / 10-19。"""
+    base = today or current_day()
+    if day == base:
+        return "今天"
+    if day == base + _dt.timedelta(days=1):
+        return "明天"
+    return day.strftime("%m-%d")
+
+
+def in_fill_window(
+    moment: Optional[_dt.datetime] = None,
+    fill_hour: int = FILL_REMIND_HOUR,
+    rollover_hour: int = DAY_ROLLOVER_HOUR,
+) -> bool:
+    """是否处于“该填明天待办”的时间段（22:00–01:59）。"""
+    value = moment or now_local()
+    if value.tzinfo is None:
+        value = value.astimezone()
+    return value.hour >= fill_hour or value.hour < rollover_hour
+
+
+def _pending_by_created(doc: Any) -> List[Dict[str, Any]]:
+    return [item for item in normalize_doc(doc)["todos"] if not item["done"]]
+
+
+def todos_for_day(doc: Any, day: Optional[_dt.date] = None) -> List[Dict[str, Any]]:
+    """某一天的未完成待办，按创建顺序排列。"""
+    target = day or current_day()
+    items = [item for item in _pending_by_created(doc) if todo_day(item) == target]
+    return sorted(items, key=lambda item: (iso_rank(item["created_at"]), item["id"]))
+
+
+def overdue_todos(doc: Any, day: Optional[_dt.date] = None) -> List[Dict[str, Any]]:
+    """比指定日期更早、仍未完成的待办（逾期），按创建顺序排列。"""
+    target = day or current_day()
+    items = [item for item in _pending_by_created(doc) if todo_day(item) < target]
+    return sorted(items, key=lambda item: (iso_rank(item["created_at"]), item["id"]))
+
+
+def next_todo_for_day(doc: Any, day: Optional[_dt.date] = None) -> Optional[Dict[str, Any]]:
+    """今天的“下一项待办”：优先今天，今天没有了再退回最早的逾期项。"""
+    target = day or current_day()
+    today_items = todos_for_day(doc, target)
+    if today_items:
+        return today_items[0]
+    overdue = overdue_todos(doc, target)
+    return overdue[0] if overdue else None
+
+
+def fill_reminder_needed(doc: Any, moment: Optional[_dt.datetime] = None) -> bool:
+    """当前是否该提醒“填写明天的待办”（22:00–01:59 且明天还没有未完成待办）。"""
+    value = moment or now_local()
+    if not in_fill_window(value):
+        return False
+    tomorrow = current_day(value) + _dt.timedelta(days=1)
+    return not any(
+        not item["done"] and todo_day(item) == tomorrow
+        for item in normalize_doc(doc)["todos"]
+    )
 
 
 def _normalize_iso(text: Any, fallback: str = _EPOCH_ISO) -> str:
@@ -538,10 +643,10 @@ def format_todo_line(
 
 
 def format_next_todo_line(
-    todo: Dict[str, Any], pending_count: Optional[int] = None
+    todo: Dict[str, Any], pending_count: Optional[int] = None, lead: str = "下一项"
 ) -> str:
-    """任务栏上“下一项待办”的文案。"""
-    return format_todo_line(todo, pending_count, lead="下一项")
+    """任务栏上“下一项待办”的文案；逾期项把 lead 传成「逾期」。"""
+    return format_todo_line(todo, pending_count, lead=lead)
 
 
 # ---------------------------------------------------------------------------

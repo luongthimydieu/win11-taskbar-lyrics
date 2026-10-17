@@ -1,4 +1,4 @@
-# Win11 任务栏歌词 + 网易云高赞热评 + 手机端跨端待办（v1.2.1）
+# Win11 任务栏歌词 + 网易云高赞热评 + 手机端跨端待办（v1.2.2）
 
 把 Windows 11 任务栏的空白处变成一条“长在任务栏上”的信息条：主行跟着网易云音乐滚动逐行歌词，副行轮播**精选的有意思热评**与**下一项待办**；到点提醒时整条变红并呼吸闪烁，左键一点就完成并回写云端。手机端是一个可添加到主屏幕的静态 PWA，在外面随手记一条待办，电脑端 30 秒内就能看到。
 
@@ -15,6 +15,7 @@ v1.2 起桌面端不再只是浮在桌面上的胶囊卡片，而是通过 Win32
 | 歌词 + 热评 | 通过网易云非官方接口取 LRC 与热赞评论；接口失败只降级这两项，不影响待办与提醒 |
 | 有意思的热评 | 从 hotComments 里过滤水评/广告/纯表情，优先挑“有故事/有情绪”的短评，轮播更慢、每首只留约 10 条 |
 | 只显示下一项待办 | 按你在手机端上传的顺序稳定显示“下一项”，完成一条自动顺延；不再在待办之间随机轮播 |
+| 每日待办节奏 | **22:00 之后添加的待办自动算“明天”**；**凌晨 2:00 自动翻篇**到新的一天（0:00–1:59 仍算前一天）；**每天 22:00 电脑托盘提醒**你填写明天的待办（右键可关），手机端 22:00 后也会显示“明天的待办还没填”的提示 |
 | 不丢数据的同步 | schema v2：条目级 `updated_at` + 删除墓碑 `tombstones` + `version`，两端同一套 `mergeDocs`，写前先合并 |
 | 省额度的轮询 | 每 30 秒带 `If-None-Match` 请求，304 不计入 GitHub 限流额度 |
 | 可靠的到点提醒 | `remind_date` + 目标时刻 + 24 小时补提醒窗口 + 云端 `notified_at` 去重 + 稍后提醒 10 分钟 |
@@ -155,13 +156,14 @@ Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\conf
 | --- | --- | --- |
 | 桌面端语法编译 | `python -m py_compile desktop/core.py desktop/taskbar_widget.py` | 通过 |
 | 静态检查 | `python -m pyflakes desktop/core.py desktop/taskbar_widget.py tests/test_core.py tools/make_icons.py` | 0 告警 |
-| 核心层单元测试 | `python -m unittest discover -s tests -v` | 55 个用例通过 |
-| 前端同步协议测试 | `node tests/test_web_protocol.js` | 20 个用例通过（含 DOM 引用与 SW 资源静态检查） |
+| 核心层单元测试 | `python -m unittest discover -s tests -v` | 63 个用例通过（含“每日待办节奏”边界用例） |
+| 前端同步协议测试 | `node tests/test_web_protocol.js` | 24 个用例通过（含 DOM 引用、SW 资源静态检查与每日节奏用例） |
 | 跨语言协议一致性 | 同一份文档分别交给 `core.canonical` 与 `P.canonical` | 3 份文档指纹逐字节一致 |
 | 热评筛选（真实接口） | `core.NetEaseClient.fetch_song_bundle(...)` | 38 行歌词 + 10 条精选评论，水评/广告被过滤 |
 | 任务栏显示（真机） | 启动后截图 + `last_text.json` | 置顶覆盖模式，窗口 17–577、白色文字显示在任务栏左侧空位、不遮图标 |
 | 实时刷新（真机） | 间隔 8 秒两次截图 | 歌词从 `And all the clubs…` 变为 `You think you broke my heart…`，副行在“精选热评”与“📋 下一项待办”之间切换 |
 | 热评筛选（真机） | `last_text.json` 的 secondary | 显示「加拿大有三宝…」等精选评论，水评/广告被过滤 |
+| 每日节奏（实测） | Python/JS 单测 + 手动验证 | 21:59 添加算当天、22:00 添加算明天、次日 2:00 前仍显示前一天、22:05 未填明天时返回提醒/显示提示 |
 | exe 打包（真机） | `build_exe.ps1`（onedir） | 产物 `desktop\dist\Win11TaskbarLyrics\` 约 130.5 MB；`Win11TaskbarLyrics.exe --selftest` 退出码 0 |
 | exe 运行（真机） | 安装到 `%LOCALAPPDATA%\Programs\Win11TaskbarLyrics` 并启动 | 任务栏正常显示白字歌词/下一项；约 153 MB 工作集、81 MB 私有内存、14 线程、1180 句柄，空闲 CPU <1% |
 | 开机自启（真机） | `install_autostart.ps1 -ExePath ...` | 启动文件夹快捷方式指向安装目录 exe、工作目录正确；下次登录自动启动 |
@@ -180,7 +182,7 @@ Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\conf
 | [02 部署指南](docs/02-部署指南.md) | 从零创建 Token、部署 Pages、两条 Python 路线、绑定、自启、升级与重置 |
 | [03 同步协议](docs/03-同步协议.md) | JSON schema、合并算法、canonical、ETag/HTTP、错误码、收敛举例、提醒语义 |
 | [04 常见问题](docs/04-常见问题.md) | 歌词/热评、媒体后端、任务栏吸附、同步报错、Token 吊销、限流等 |
-| [05 更新日志](docs/05-更新日志.md) | v1.2.1 / v1.2.0 / v1.1.0 变更对照与升级注意事项 |
+| [05 更新日志](docs/05-更新日志.md) | v1.2.2 / v1.2.1 / v1.2.0 / v1.1.0 变更对照与升级注意事项 |
 | [06 打包与开机自启](docs/06-打包与开机自启.md) | `build_exe.ps1`、`install_autostart.ps1`、启动文件夹原理、打包排错 |
 | [Logo 提示词](docs/LOGO_PROMPT.md) | 给 GPT / DALL·E 的项目图标、横幅提示词，以及 ICO / PWA 图标生成步骤 |
 

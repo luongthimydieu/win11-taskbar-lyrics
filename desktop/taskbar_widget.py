@@ -92,7 +92,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -123,6 +123,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "comment_rotate_sec": 20,  # 有意思的热评之间的轮播间隔（秒）
     "sync_sec": 30,            # 云端同步间隔（秒）
     "show_tray": True,
+    "daily_fill_reminder": True,   # 每天 22:00 提醒填明天的待办
+    "last_fill_reminded": "",      # 最近一次已提醒的“展示日”，避免重复弹
 }
 
 # ---------------------------------------------------------------------------
@@ -1060,6 +1062,9 @@ class TaskbarWidget(QWidget):
         self._alert_queue: List[str] = []
         self._current_alert_id: Optional[str] = None
 
+        # 每日待办：凌晨 2:00 翻篇、22:00 提醒填明天
+        self._last_daily_day = core.current_day()
+
         # 同步状态
         self._sync_thread: Optional[threading.Thread] = None
         self._sync_running = False
@@ -1529,6 +1534,11 @@ class TaskbarWidget(QWidget):
         self.snap_timer.timeout.connect(self.ensure_taskbar_position)
         self.snap_timer.start(5000)
 
+        # 每日待办：每 30 秒检查一次“凌晨 2 点翻篇 / 22 点提醒填明天”
+        self.daily_timer = QTimer(self)
+        self.daily_timer.timeout.connect(self._check_daily_events)
+        self.daily_timer.start(30000)
+
         try:
             app = QGuiApplication.instance()
             if app is not None:
@@ -1633,11 +1643,26 @@ class TaskbarWidget(QWidget):
         return self._hot_comments[index % len(self._hot_comments)]
 
     def _next_todo_line(self) -> str:
-        """稳定显示“下一项待办”（按手机端上传顺序），完成一项自动顺延。"""
-        todo = core.next_todo(self.doc)
+        """稳定显示“下一项待办”：只算今天的，今天没有就退回最早的逾期项。"""
+        today = core.current_day()
+        todo = core.next_todo_for_day(self.doc, today)
         if todo is None:
-            return "✅ 待办已全部完成"
-        return core.format_next_todo_line(todo, len(core.pending_todos(self.doc)))
+            return "📋 今天没有待办 · 22:00 提醒你填明天的"
+        if core.todo_day(todo) == today:
+            return core.format_next_todo_line(todo, len(core.todos_for_day(self.doc, today)))
+        return core.format_next_todo_line(
+            todo, len(core.overdue_todos(self.doc, today)), lead="逾期"
+        )
+
+    def _fill_hint_line(self) -> str:
+        """22:00–01:59 且明天待办还没填时，副行显示的提醒文案。"""
+        if not bool(self.config.get("daily_fill_reminder", True)):
+            return ""
+        moment = core.now_local()
+        if not core.fill_reminder_needed(self.doc, moment):
+            return ""
+        target = core.target_day(moment)
+        return f"📝 22:00 了，去手机填明天的待办（{target.strftime('%m-%d')}）"
 
     def _current_alert(self) -> Optional[Dict[str, Any]]:
         if not self._current_alert_id:
@@ -1675,18 +1700,25 @@ class TaskbarWidget(QWidget):
             lyric = f"🎵 {song_label}"
 
         mode = str(self.config.get("mode", "auto"))
+        fill_hint = self._fill_hint_line()
         if mode == "lyrics":
             return lyric, f"🎶 逐行歌词 · {song_label}", False
         if mode == "comments":
             return comment, f"💬 有意思的热评 · {song_label}", False
         if mode == "todos":
+            if fill_hint:
+                return todo_line, fill_hint, False
             return todo_line, f"📋 下一项待办 · 共 {len(pending)} 项未完成", False
 
         # auto：播放时主行歌词、副行在「有意思的热评」与「下一项待办」之间切换；
-        # 没播放时主行直接显示下一项待办。
+        # 没播放时主行直接显示下一项待办。22:00–2:00 且明天还没填时，副行优先显示填写提醒。
         if playing:
+            if fill_hint:
+                return lyric, fill_hint, False
             secondary = comment if step % 2 == 0 else todo_line
             return lyric, secondary, False
+        if fill_hint:
+            return todo_line, fill_hint, False
         return todo_line, comment, False
 
     def refresh_texts(self) -> None:
@@ -1736,6 +1768,63 @@ class TaskbarWidget(QWidget):
         self._lyrics_state = "failed"
         self._lyrics_error = "拉取超时"
         LOGGER.warning("歌词/热评拉取超时（25 秒），先降级显示，稍后自动重试")
+
+    # ==================== 每日待办节奏 ====================
+    def _check_daily_events(self) -> None:
+        """每 30 秒检查：凌晨 2:00 自动翻篇、22:00 提醒填写明天的待办。"""
+        moment = core.now_local()
+        today = core.current_day(moment)
+
+        if self._last_daily_day != today:
+            LOGGER.info(
+                "每日翻篇：%s -> %s（今日待办 %s 项）",
+                self._last_daily_day,
+                today,
+                len(core.todos_for_day(self.doc, today)),
+            )
+            self._last_daily_day = today
+            # 翻篇后立刻同步一次，避免刚过 2 点还没拉到手机新增的待办
+            self.request_sync()
+            self.refresh_texts()
+
+        if not bool(self.config.get("daily_fill_reminder", True)):
+            return
+        if not core.fill_reminder_needed(self.doc, moment):
+            return
+        remind_key = today.isoformat()
+        if str(self.config.get("last_fill_reminded") or "") == remind_key:
+            return
+
+        self.config["last_fill_reminded"] = remind_key
+        save_config(self.config)
+        tomorrow = core.target_day(moment)
+        message = (
+            f"明天的待办还没填（{tomorrow.strftime('%m-%d')}），"
+            "打开手机上的待办页面填一下吧～"
+        )
+        LOGGER.info("发送每日填写提醒：%s", message)
+        if self._tray is not None:
+            self._tray.showMessage(
+                "📝 待办提醒",
+                message,
+                QSystemTrayIcon.MessageIcon.Information,
+                8000,
+            )
+        self.refresh_texts()
+
+    def toggle_daily_fill_reminder(self) -> None:
+        enabled = not bool(self.config.get("daily_fill_reminder", True))
+        self.config["daily_fill_reminder"] = enabled
+        save_config(self.config)
+        LOGGER.info("每日 22:00 填写提醒：%s", "开" if enabled else "关")
+        if self._tray is not None:
+            self._tray.showMessage(
+                APP_TITLE,
+                "已开启：每天 22:00 提醒填明天的待办" if enabled else "已关闭每日填写提醒",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
+        self.refresh_texts()
 
     def _update_tray_tooltip(self) -> None:
         if self._tray is None:
@@ -2080,6 +2169,12 @@ class TaskbarWidget(QWidget):
                 todo_menu.addAction(action)
 
         menu.addSeparator()
+        daily_action = QAction("⏰ 每天 22:00 提醒填待办", menu)
+        daily_action.setCheckable(True)
+        daily_action.setChecked(bool(self.config.get("daily_fill_reminder", True)))
+        daily_action.triggered.connect(self.toggle_daily_fill_reminder)
+        menu.addAction(daily_action)
+        menu.addSeparator()
         menu.addAction("🔄 立即同步", self.request_sync)
         menu.addAction("⚙️ 配置 GitHub Gist 云同步", self.open_settings)
         menu.addAction("📌 重新贴合任务栏", self.reapply_taskbar_layout)
@@ -2183,6 +2278,11 @@ class TaskbarWidget(QWidget):
         tray_menu.addAction("显示 / 隐藏", self.toggle_visibility)
         tray_menu.addAction("📌 重新贴合任务栏", self.reapply_taskbar_layout)
         tray_menu.addAction("🔄 立即同步", self.request_sync)
+        daily_tray_action = QAction("⏰ 每天 22:00 提醒填待办", tray_menu)
+        daily_tray_action.setCheckable(True)
+        daily_tray_action.setChecked(bool(self.config.get("daily_fill_reminder", True)))
+        daily_tray_action.triggered.connect(self.toggle_daily_fill_reminder)
+        tray_menu.addAction(daily_tray_action)
         tray_menu.addAction("⚙️ 配置同步", self.open_settings)
         tray_menu.addSeparator()
         tray_menu.addAction("退出", QApplication.quit)

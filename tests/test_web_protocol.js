@@ -226,7 +226,50 @@ test('merge 对同一文档幂等', () => {
   assert.equal(canon(P.mergeDocs(doc, doc)), canon(doc));
 });
 
-console.log('\n[5] 部署资源与 DOM 引用静态检查');
+console.log('\n[5] 每日待办节奏（22:00 填明天 / 凌晨 2:00 翻篇）');
+
+function localDate(year, month, day, hour, minute) {
+  return new Date(year, month - 1, day, hour, minute, 0);
+}
+
+test('currentDay 凌晨 2 点前算前一天', () => {
+  assert.equal(P.currentDay(localDate(2026, 10, 18, 1, 30)).getDate(), 17);
+  assert.equal(P.currentDay(localDate(2026, 10, 18, 2, 0)).getDate(), 18);
+  assert.equal(P.currentDay(localDate(2026, 10, 18, 21, 59)).getDate(), 18);
+});
+
+test('targetDay 22:00 后算明天', () => {
+  assert.equal(P.targetDay(localDate(2026, 10, 17, 21, 59)).getDate(), 17);
+  assert.equal(P.targetDay(localDate(2026, 10, 17, 22, 0)).getDate(), 18);
+  assert.equal(P.targetDay(localDate(2026, 10, 18, 1, 30)).getDate(), 18);
+});
+
+test('todoDay 按创建时间归属', () => {
+  const morning = P.normalizeTodo({
+    id: 'a',
+    text: '上午填的',
+    created_at: '2026-10-17T10:00:00+08:00',
+  });
+  const evening = P.normalizeTodo({
+    id: 'b',
+    text: '晚上填的',
+    created_at: '2026-10-17T22:30:00+08:00',
+  });
+  assert.equal(P.todoDay(morning).getDate(), 17);
+  assert.equal(P.todoDay(evening).getDate(), 18);
+});
+
+test('fillReminderNeeded 22 点后明天没人填时提醒', () => {
+  const empty = P.emptyDoc();
+  assert.equal(P.fillReminderNeeded(empty, localDate(2026, 10, 17, 22, 5)), true);
+  assert.equal(P.fillReminderNeeded(empty, localDate(2026, 10, 18, 10, 0)), false);
+  const filled = P.addTodo(empty, { text: '明天的任务' });
+  filled.todos[0].created_at = '2026-10-17T22:30:00+08:00';
+  filled.todos[0].updated_at = filled.todos[0].created_at;
+  assert.equal(P.fillReminderNeeded(filled, localDate(2026, 10, 17, 22, 5)), false);
+});
+
+console.log('\n[6] 部署资源与 DOM 引用静态检查');
 
 test('所有 $("id") 引用的元素都存在于 HTML', () => {
   const htmlIds = new Set([...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]));
