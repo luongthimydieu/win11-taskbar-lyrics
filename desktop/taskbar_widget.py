@@ -92,7 +92,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.2.8"
+APP_VERSION = "1.2.9"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -113,6 +113,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "gh_token": "",
     "gist_id": "",
     "github_direct": True,     # api.github.com 直连（绕过系统代理），避免代理抖动导致同步失败
+    "lyric_offset_ms": 0,      # 歌词同步微调（正数=歌词更早；用于修正播放器/SMTC 的 0.x 秒延迟）
     "offset_ratio": 0.0,       # 0=自动；拖拽后保存为相对任务栏宽度的比例
     "auto_anchor": True,       # True=自动贴到托盘区左侧的空位
     "width": DEFAULT_WIDTH,
@@ -1022,12 +1023,12 @@ class Bridge(QObject):
 # ---------------------------------------------------------------------------
 
 class MediaWatcher(threading.Thread):
-    """每 2 秒读取一次当前播放状态：优先 SMTC，失败时退回网易云窗口标题。"""
+    """每 0.5 秒读取一次当前播放状态：优先 SMTC，失败时退回网易云窗口标题。"""
 
-    def __init__(self, bridge: Bridge, interval: float = 2.0) -> None:
+    def __init__(self, bridge: Bridge, interval: float = 0.5) -> None:
         super().__init__(daemon=True, name="MediaWatcher")
         self.bridge = bridge
-        self.interval = max(1.0, float(interval))
+        self.interval = max(0.2, float(interval))
         self._stop_event = threading.Event()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._manager: Any = None
@@ -1091,11 +1092,21 @@ class MediaWatcher(threading.Thread):
         artist = str(getattr(media, "artist", "") or "").strip()
 
         position = -1.0
+        position_at = 0.0
         try:
             timeline = target.get_timeline_properties()
             position = float(timeline.position.total_seconds())
+            # LastUpdatedTime 是“这个 position 采样于什么时候”（UTC），比轮询时刻更准，
+            # 可以让歌词估算少 0.x 秒误差；部分播放器会给 1601 哨兵值，由上层校验丢弃。
+            updated = getattr(timeline, "last_updated_time", None)
+            if updated is not None and hasattr(updated, "timestamp"):
+                try:
+                    position_at = float(updated.timestamp())
+                except (OSError, OverflowError, ValueError):
+                    position_at = 0.0
         except Exception:  # noqa: BLE001
             position = -1.0
+            position_at = 0.0
 
         is_playing = True
         try:
@@ -1108,6 +1119,7 @@ class MediaWatcher(threading.Thread):
             "title": title,
             "artist": artist,
             "position": position,
+            "position_at": position_at,
             "is_playing": is_playing,
             "source": "smtc",
             "app_id": app_id,
@@ -1298,6 +1310,12 @@ class TaskbarWidget(QWidget):
         self._media: Optional[Dict[str, Any]] = None
         self._media_mono = 0.0
         self._song_key = ""
+        # 本地歌词时间轴（SMTC 的时间轴经常给 0/空值，需要本地单调推进）
+        self._est_song = ""
+        self._est_base = 0.0
+        self._est_mono = time.monotonic()
+        self._est_playing = False
+        self._est_anchor_seen = -1.0
         self._lyrics: List[Tuple[float, str]] = []
         self._hot_comments: List[str] = []
         self._lyrics_state = "idle"   # idle | loading | ok | failed
@@ -1844,7 +1862,8 @@ class TaskbarWidget(QWidget):
             pass
 
     def start_media_watcher(self) -> None:
-        self.media_watcher = MediaWatcher(self.bridge, interval=2.0)
+        # 0.5 秒一读，位置锚点更细，歌词切换更跟手
+        self.media_watcher = MediaWatcher(self.bridge, interval=0.5)
         self.media_watcher.start()
 
     # ==================== 媒体与歌词 ====================
@@ -1879,7 +1898,57 @@ class TaskbarWidget(QWidget):
                 self._lyrics_state = "loading"
                 self._lyrics_error = ""
                 self._request_lyrics(key, title, artist)
+        self._update_estimated_timeline(info or {}, key)
         self.refresh_texts()
+
+    def _update_estimated_timeline(self, info: Dict[str, Any], key: str) -> None:
+        """维护“本地歌词时间轴”。
+
+        网易云等播放器的 SMTC 时间轴经常一直返回 0 / 空值，如果每轮轮询都把锚点重置成 0，
+        歌词就会卡住或跳回开头。这里只在“换歌 / 明显跳转 / 播放/暂停切换”时重新锚定，
+        其余时间用单调时钟平滑推进。
+        """
+        now = time.monotonic()
+        anchor = float(info.get("position", -1) or -1)
+        playing = bool(info.get("is_playing"))
+
+        if not key:
+            self._est_song = ""
+            self._est_base = 0.0
+            self._est_mono = now
+            self._est_playing = False
+            self._est_anchor_seen = -1.0
+            return
+
+        if key != self._est_song:
+            self._est_song = key
+            self._est_base = max(0.0, anchor)
+            self._est_mono = now
+            self._est_playing = playing
+            self._est_anchor_seen = anchor
+            return
+
+        if playing != self._est_playing:
+            if not playing:
+                # 暂停：把当前估算值冻结下来
+                self._est_base = self._estimate_from_base(now)
+            self._est_mono = now
+            self._est_playing = playing
+            self._est_anchor_seen = anchor
+            return
+
+        if not playing:
+            return
+
+        # 播放中：SMTC 位置有明显变化（或首次拿到有效进度）才重新锚定
+        if anchor >= 0:
+            estimate = self._estimate_from_base(now)
+            if abs(anchor - self._est_anchor_seen) > 0.25 or (
+                anchor > 0.5 and abs(anchor - estimate) > 0.5
+            ):
+                self._est_base = anchor
+                self._est_mono = now
+            self._est_anchor_seen = anchor
 
     def _request_lyrics(self, key: str, title: str, artist: str) -> None:
         if self._lyrics_request_key == key and self._lyrics_state == "loading":
@@ -1915,15 +1984,21 @@ class TaskbarWidget(QWidget):
             LOGGER.warning("歌词/热评不可用：%s（%s）", key, self._lyrics_error)
         self.refresh_texts()
 
+    def _estimate_from_base(self, mono: float) -> float:
+        return max(0.0, self._est_base + max(0.0, mono - self._est_mono))
+
     def _estimated_position(self) -> float:
+        offset = float(self.config.get("lyric_offset_ms", 0) or 0) / 1000.0
+        if self._est_song:
+            if self._est_playing:
+                return self._estimate_from_base(time.monotonic()) + offset
+            return max(0.0, self._est_base + offset)
         if self._media is None:
-            return 0.0
+            return max(0.0, offset)
         anchor = float(self._media.get("position", -1) or -1)
-        if self._media.get("is_playing"):
-            if anchor >= 0:
-                return max(0.0, anchor + (time.monotonic() - self._media_mono))
-            return max(0.0, time.monotonic() - self._fallback_start_mono)
-        return max(0.0, anchor)
+        if anchor >= 0:
+            return max(0.0, anchor + offset)
+        return max(0.0, offset)
 
     # ==================== 轮播与文案 ====================
     def _rotation_step(self) -> int:
@@ -2240,6 +2315,34 @@ class TaskbarWidget(QWidget):
                 4000,
             )
         self.request_sync()
+
+    def adjust_lyric_offset(self, delta_ms: int) -> None:
+        current = int(self.config.get("lyric_offset_ms", 0) or 0)
+        value = max(-3000, min(3000, current + int(delta_ms)))
+        self.config["lyric_offset_ms"] = value
+        save_config(self.config)
+        LOGGER.info("歌词同步偏移：%+d ms", value)
+        if self._tray is not None:
+            self._tray.showMessage(
+                APP_TITLE,
+                f"歌词同步偏移 {value / 1000:+.1f}s（正数=歌词更早）",
+                QSystemTrayIcon.MessageIcon.Information,
+                4000,
+            )
+        self.refresh_texts()
+
+    def reset_lyric_offset(self) -> None:
+        self.config["lyric_offset_ms"] = 0
+        save_config(self.config)
+        LOGGER.info("歌词同步偏移已重置为 0 ms")
+        if self._tray is not None:
+            self._tray.showMessage(
+                APP_TITLE,
+                "歌词同步偏移已重置（0s）",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
+        self.refresh_texts()
 
     def _update_tray_tooltip(self) -> None:
         if self._tray is None:
@@ -2612,6 +2715,14 @@ class TaskbarWidget(QWidget):
         direct_action.setChecked(bool(self.config.get("github_direct", True)))
         direct_action.triggered.connect(self.toggle_github_direct)
         menu.addAction(direct_action)
+        offset_ms = int(self.config.get("lyric_offset_ms", 0) or 0)
+        lyric_menu = menu.addMenu(f"🎶 歌词同步微调（{offset_ms / 1000:+.1f}s）")
+        lyric_menu.addAction("歌词更早 0.5s", lambda: self.adjust_lyric_offset(500))
+        lyric_menu.addAction("歌词更早 0.2s", lambda: self.adjust_lyric_offset(200))
+        lyric_menu.addAction("歌词更晚 0.2s", lambda: self.adjust_lyric_offset(-200))
+        lyric_menu.addAction("歌词更晚 0.5s", lambda: self.adjust_lyric_offset(-500))
+        lyric_menu.addSeparator()
+        lyric_menu.addAction("重置偏移（0s）", self.reset_lyric_offset)
         menu.addSeparator()
         menu.addAction("🔄 立即同步", self.request_sync)
         menu.addAction("⚙️ 配置 GitHub Gist 云同步", self.open_settings)
@@ -2731,6 +2842,14 @@ class TaskbarWidget(QWidget):
         direct_tray_action.setChecked(bool(self.config.get("github_direct", True)))
         direct_tray_action.triggered.connect(self.toggle_github_direct)
         tray_menu.addAction(direct_tray_action)
+        offset_ms = int(self.config.get("lyric_offset_ms", 0) or 0)
+        lyric_tray_menu = tray_menu.addMenu(f"🎶 歌词同步微调（{offset_ms / 1000:+.1f}s）")
+        lyric_tray_menu.addAction("歌词更早 0.5s", lambda: self.adjust_lyric_offset(500))
+        lyric_tray_menu.addAction("歌词更早 0.2s", lambda: self.adjust_lyric_offset(200))
+        lyric_tray_menu.addAction("歌词更晚 0.2s", lambda: self.adjust_lyric_offset(-200))
+        lyric_tray_menu.addAction("歌词更晚 0.5s", lambda: self.adjust_lyric_offset(-500))
+        lyric_tray_menu.addSeparator()
+        lyric_tray_menu.addAction("重置偏移（0s）", self.reset_lyric_offset)
         tray_menu.addAction("⚙️ 配置同步", self.open_settings)
         tray_menu.addSeparator()
         tray_menu.addAction("退出", QApplication.quit)
