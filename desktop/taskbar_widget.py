@@ -92,7 +92,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.2.4"
+APP_VERSION = "1.2.5"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -350,6 +350,10 @@ class Win32Taskbar:
         _user32.IsIconic.restype = wintypes.BOOL
         _user32.IsWindowVisible.argtypes = [wintypes.HWND]
         _user32.IsWindowVisible.restype = wintypes.BOOL
+        _user32.WindowFromPoint.argtypes = [wintypes.POINT]
+        _user32.WindowFromPoint.restype = wintypes.HWND
+        _user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        _user32.GetAncestor.restype = wintypes.HWND
     except AttributeError:  # pragma: no cover - 极端精简系统
         pass
     # GDI 截图：一次 BitBlt 抓取整条任务栏，避免逐像素 GetPixel 太慢卡住 UI
@@ -472,7 +476,6 @@ class Win32Taskbar:
             "Shell_TrayWnd",
             "Progman",
             "WorkerW",
-            "Windows.UI.Core.CoreWindow",
         ):
             return False
         try:
@@ -487,6 +490,32 @@ class Win32Taskbar:
         if window_rect is None or monitor is None:
             return False
         return core.rect_covers_monitor(window_rect, monitor, tolerance=2) or cls.shell_d3d_fullscreen()
+
+    @classmethod
+    def window_at(cls, x: int, y: int) -> int:
+        """屏幕坐标处最上层的窗口句柄。"""
+        try:
+            return int(cls._user32.WindowFromPoint(wintypes.POINT(int(x), int(y))) or 0)
+        except Exception:  # noqa: BLE001
+            return 0
+
+    @classmethod
+    def window_root(cls, hwnd: int) -> int:
+        """取窗口的顶层祖先（GW_ANCESTOR_ROOT）。"""
+        try:
+            root = cls._user32.GetAncestor(wintypes.HWND(hwnd), 2)  # GA_ROOT
+            return int(root or 0)
+        except Exception:  # noqa: BLE001
+            return 0
+
+    @classmethod
+    def is_point_on_taskbar(cls, x: int, y: int) -> bool:
+        """某个屏幕坐标处是否真的是任务栏（而不是被别的窗口盖住）。"""
+        hwnd = cls.window_at(x, y)
+        taskbar = cls.find()
+        if not hwnd or not taskbar:
+            return False
+        return cls.window_root(hwnd) == taskbar
 
     @classmethod
     def _child_by_class(cls, parent: int, class_name: str) -> int:
@@ -1956,11 +1985,39 @@ class TaskbarWidget(QWidget):
         self.refresh_texts()
 
     # ==================== 全屏应用自动隐藏 ====================
+    def _taskbar_covered_by_other(self) -> bool:
+        """任务栏那一行是否被别的窗口盖住（B 站网页全屏/客户端全屏/自动隐藏时）。
+
+        取任务栏里两个不被自己遮住的点，看命中的窗口是不是任务栏本身；
+        不是就说明任务栏被盖住/藏起来了，此时任务栏组件也应该隐藏。
+        """
+        taskbar = Win32Taskbar.find()
+        taskbar_rect = Win32Taskbar.rect(taskbar) if taskbar else None
+        if not taskbar or taskbar_rect is None:
+            return False
+        current = Win32Taskbar.rect(int(self.winId()))
+        middle_y = (taskbar_rect[1] + taskbar_rect[3]) // 2
+        candidates = [
+            (taskbar_rect[2] - 40, middle_y),   # 托盘附近
+            (taskbar_rect[0] + 30, middle_y),   # 最左侧
+        ]
+        checked = 0
+        for x, y in candidates:
+            if current is not None and (
+                current[0] - 4 <= x <= current[2] + 4
+                and current[1] - 4 <= y <= current[3] + 4
+            ):
+                continue  # 这个点被自己挡着，换一个
+            checked += 1
+            if not Win32Taskbar.is_point_on_taskbar(x, y):
+                return True
+        return False
+
     def _check_fullscreen_state(self) -> None:
         """B 站/网页视频全屏（F11）或全屏游戏时自动隐藏，退出全屏后恢复。
 
-        带防抖：连续 2 秒检测到全屏才隐藏，连续 3 秒不是全屏才恢复，
-        避免全屏游戏/视频切换那一瞬间的窗口变化导致组件一闪一闪。
+        判据：①前台窗口覆盖整个显示器；②任务栏那一行被别的窗口盖住/藏起来。
+        带防抖：连续 2 秒确认才隐藏，连续 3 秒不满足才恢复，避免一闪一闪。
         """
         if self.selftest or self._dragging:
             return
@@ -1972,6 +2029,8 @@ class TaskbarWidget(QWidget):
             return
 
         fullscreen = Win32Taskbar.is_foreground_fullscreen(int(self.winId()))
+        if not fullscreen:
+            fullscreen = self._taskbar_covered_by_other()
         if fullscreen:
             self._fullscreen_true_streak += 1
             self._fullscreen_false_streak = 0
@@ -1980,7 +2039,7 @@ class TaskbarWidget(QWidget):
             self._fullscreen_true_streak = 0
 
         if self._fullscreen_true_streak >= 2 and not self._hidden_for_fullscreen:
-            LOGGER.info("检测到全屏应用，暂时隐藏任务栏组件")
+            LOGGER.info("检测到全屏/任务栏被覆盖，暂时隐藏任务栏组件")
             self._hidden_for_fullscreen = True
             if not self._user_hidden:
                 self.hide()
