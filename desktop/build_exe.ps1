@@ -34,9 +34,20 @@ $pyInstallerArgs = @(
     "--collect-submodules", "PyQt6.QtCore"
 )
 if ($OneFile) { $pyInstallerArgs += "--onefile" } else { $pyInstallerArgs += "--onedir" }
+# 默认使用项目自带的 logo.ico（如果存在），无需每次手动传 -Icon
+if (-not $Icon) {
+    $defaultIcon = Join-Path $PSScriptRoot "logo.ico"
+    if (Test-Path -LiteralPath $defaultIcon) { $Icon = $defaultIcon }
+}
 if ($Icon -and (Test-Path -LiteralPath $Icon)) {
     $pyInstallerArgs += @("--icon", (Resolve-Path -LiteralPath $Icon).Path)
     Write-Host "使用图标：$Icon" -ForegroundColor DarkGray
+}
+# 把 logo.png 一起打进去，托盘图标/窗口图标运行时读取
+$logoPng = Join-Path $PSScriptRoot "logo.png"
+if (Test-Path -LiteralPath $logoPng) {
+    $pyInstallerArgs += @("--add-data", "$logoPng;.")
+    Write-Host "内置 Logo：logo.png" -ForegroundColor DarkGray
 }
 
 # 当前环境装了哪个媒体后端，就把哪个整体收集进包。

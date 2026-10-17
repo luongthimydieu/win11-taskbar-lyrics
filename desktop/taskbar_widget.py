@@ -168,6 +168,23 @@ def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def find_logo_file() -> Optional[Path]:
+    """找项目自带的 logo.png（源码目录 / PyInstaller 解包目录 / 用户数据目录）。"""
+    candidates: List[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "logo.png")
+    candidates.append(_HERE / "logo.png")
+    candidates.append(APP_DIR / "logo.png")
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
 def load_config() -> Dict[str, Any]:
     config = dict(DEFAULT_CONFIG)
     migrated = False
@@ -1088,6 +1105,7 @@ class TaskbarWidget(QWidget):
         self._last_notified_error = ""
 
         self.init_ui()
+        self._apply_logo()
         self.init_timers()
         self.start_media_watcher()
         if not selftest:
@@ -1099,6 +1117,19 @@ class TaskbarWidget(QWidget):
             QTimer.singleShot(1200, self.request_sync)
 
     # ==================== 初始化 ====================
+    def _apply_logo(self) -> None:
+        """有 logo.png 就用作窗口/任务栏图标（exe 图标在打包时已带入）。"""
+        logo = find_logo_file()
+        if logo is None:
+            return
+        icon = QIcon(str(logo))
+        if icon.isNull():
+            return
+        self.setWindowIcon(icon)
+        app = QApplication.instance()
+        if app is not None:
+            app.setWindowIcon(icon)
+
     def _build_store(self) -> Optional[core.GitHubGistStore]:
         token = str(self.config.get("gh_token", "") or "").strip()
         gist_id = str(self.config.get("gist_id", "") or "").strip()
@@ -2293,6 +2324,17 @@ class TaskbarWidget(QWidget):
 
     @staticmethod
     def _make_tray_icon() -> QIcon:
+        logo = find_logo_file()
+        if logo is not None:
+            pixmap = QPixmap(str(logo))
+            if not pixmap.isNull():
+                scaled = pixmap.scaled(
+                    64,
+                    64,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                return QIcon(scaled)
         pixmap = QPixmap(64, 64)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
