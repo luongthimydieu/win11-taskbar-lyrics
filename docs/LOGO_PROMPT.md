@@ -1,5 +1,10 @@
 # Logo 生成提示词（给 GPT / DALL·E / 其他绘图模型）
 
+> 本项目已生成并内置正式 Logo（磨砂玻璃音乐清单图标）：
+> `desktop/logo_source.png`（原图）、`desktop/logo.png`（去白底 1024 透明）、`desktop/logo.ico`（exe 图标）；
+> 手机端 PWA 图标（`github-pages/icon-192.png` / `icon-512.png` / `apple-touch-icon.png`）也已由它生成。
+> 下面的提示词留作以后换风格时参考。
+
 项目定位：**Win11 任务栏歌词 + 网易云精选热评 + 手机端跨端待办**。视觉关键词建议：
 深色、科技感、音乐、任务栏、待办勾选、蓝色高光、简洁矢量、小尺寸可辨识。
 

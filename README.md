@@ -1,5 +1,9 @@
 # Win11 任务栏歌词 + 网易云高赞热评 + 手机端跨端待办（v1.2.2）
 
+<img src="desktop/logo.png" alt="项目 Logo" width="96" align="right" />
+
+> Logo：磨砂玻璃音乐清单 · 已用于 exe 图标、托盘/窗口图标与手机 PWA 图标。
+
 把 Windows 11 任务栏的空白处变成一条“长在任务栏上”的信息条：主行跟着网易云音乐滚动逐行歌词，副行轮播**精选的有意思热评**与**下一项待办**；到点提醒时整条变红并呼吸闪烁，左键一点就完成并回写云端。手机端是一个可添加到主屏幕的静态 PWA，在外面随手记一条待办，电脑端 30 秒内就能看到。
 
 v1.2 起桌面端不再只是浮在桌面上的胶囊卡片，而是通过 Win32 `SetParent` 真正嵌入任务栏，文字直接绘制在任务栏表面（不画背景、不遮图标）；嵌入失败会自动退回置顶覆盖模式。
@@ -137,7 +141,7 @@ Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\conf
 | 重新生成 PWA 图标 | `python tools\make_icons.py` | CMD |
 | 用 AI 生成的 PNG 生成 PWA 图标 | `python tools\make_icons.py --source logo.png` | CMD |
 | PNG 转多尺寸 .ico（exe/快捷方式图标） | `python tools\make_ico.py desktop\logo.png desktop\logo.ico` | CMD |
-| 打包成 exe | `powershell -ExecutionPolicy Bypass -File desktop\build_exe.ps1` | PowerShell |
+| 打包成 exe | `powershell -ExecutionPolicy Bypass -File desktop\build_exe.ps1` | PowerShell（已内置 `logo.ico`，自动带图标） |
 | 打包成 exe（自定义图标） | `powershell -ExecutionPolicy Bypass -File desktop\build_exe.ps1 -Icon desktop\logo.ico` | PowerShell |
 | 单文件 exe | `powershell -ExecutionPolicy Bypass -File desktop\build_exe.ps1 -OneFile` | PowerShell |
 | 设置开机自启 | `powershell -ExecutionPolicy Bypass -File desktop\install_autostart.ps1` | PowerShell |
