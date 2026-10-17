@@ -92,7 +92,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -1187,6 +1187,8 @@ class TaskbarWidget(QWidget):
         self._hidden_for_space = False
         self._hidden_for_fullscreen = False
         self._user_hidden = False
+        self._fullscreen_true_streak = 0
+        self._fullscreen_false_streak = 0
 
         # 拖拽状态
         self._drag_offset = None
@@ -1615,10 +1617,10 @@ class TaskbarWidget(QWidget):
                 )
             dark = Win32Taskbar.dark_mode(taskbar)
             if dark != self._dark_taskbar:
+                # 只更新记录，不要重新排版：以前这里会 reapply，导致每 5 秒把窗口
+                # 挪出屏幕再放回来，表现为任务栏组件一直闪烁
                 self._dark_taskbar = dark
-                self._force_clean_rescan = True
-                self.apply_taskbar_mode()
-                return
+                self.update()
             # 轻量重新置顶，防止被任务栏/其他置顶窗口压下去
             Win32Taskbar.move_topmost(
                 int(self.winId()),
@@ -1955,24 +1957,40 @@ class TaskbarWidget(QWidget):
 
     # ==================== 全屏应用自动隐藏 ====================
     def _check_fullscreen_state(self) -> None:
-        """B 站/网页视频全屏（F11）或全屏游戏时自动隐藏，退出全屏后恢复。"""
+        """B 站/网页视频全屏（F11）或全屏游戏时自动隐藏，退出全屏后恢复。
+
+        带防抖：连续 2 秒检测到全屏才隐藏，连续 3 秒不是全屏才恢复，
+        避免全屏游戏/视频切换那一瞬间的窗口变化导致组件一闪一闪。
+        """
         if self.selftest or self._dragging:
             return
         if not bool(self.config.get("hide_on_fullscreen", True)):
+            self._fullscreen_true_streak = 0
+            self._fullscreen_false_streak = 0
             if self._hidden_for_fullscreen:
                 self._restore_from_fullscreen()
             return
+
         fullscreen = Win32Taskbar.is_foreground_fullscreen(int(self.winId()))
-        if fullscreen and not self._hidden_for_fullscreen:
+        if fullscreen:
+            self._fullscreen_true_streak += 1
+            self._fullscreen_false_streak = 0
+        else:
+            self._fullscreen_false_streak += 1
+            self._fullscreen_true_streak = 0
+
+        if self._fullscreen_true_streak >= 2 and not self._hidden_for_fullscreen:
             LOGGER.info("检测到全屏应用，暂时隐藏任务栏组件")
             self._hidden_for_fullscreen = True
             if not self._user_hidden:
                 self.hide()
-        elif not fullscreen and self._hidden_for_fullscreen:
+        elif self._fullscreen_false_streak >= 3 and self._hidden_for_fullscreen:
             self._restore_from_fullscreen()
 
     def _restore_from_fullscreen(self) -> None:
         self._hidden_for_fullscreen = False
+        self._fullscreen_true_streak = 0
+        self._fullscreen_false_streak = 0
         if self._user_hidden:
             return
         LOGGER.info("退出全屏，恢复任务栏组件")
