@@ -1,4 +1,4 @@
-# Win11 任务栏歌词 + 网易云高赞热评 + 手机端跨端待办（v1.2.2）
+﻿# Win11 任务栏歌词 + 网易云高赞热评 + 手机端跨端待办（v1.2.2）
 
 <img src="desktop/logo.png" alt="项目 Logo" width="96" align="right" />
 
@@ -189,6 +189,7 @@ Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\conf
 | [05 更新日志](docs/05-更新日志.md) | v1.2.2 / v1.2.1 / v1.2.0 / v1.1.0 变更对照与升级注意事项 |
 | [06 打包与开机自启](docs/06-打包与开机自启.md) | `build_exe.ps1`、`install_autostart.ps1`、启动文件夹原理、打包排错 |
 | [Logo 提示词](docs/LOGO_PROMPT.md) | 给 GPT / DALL·E 的项目图标、横幅提示词，以及 ICO / PWA 图标生成步骤 |
+| [07 发布 exe](docs/07-发布exe到GitHub.md) | 把打包好的 zip 发到 GitHub Releases 的三种方法与发布前验证 |
 
 v1.0 的原始文件保存在 `reference/`（`original_taskbar_widget.py`、`original_index.html`），只用于对照，不参与运行。
 
