@@ -1,4 +1,4 @@
-# Win11 任务栏歌词 + 网易云高赞热评 + 手机端跨端待办（v1.2.5）
+# Win11 任务栏歌词 + 网易云高赞热评 + 手机端跨端待办（v1.2.6）
 
 <img src="desktop/logo.png" alt="项目 Logo" width="96" align="right" />
 

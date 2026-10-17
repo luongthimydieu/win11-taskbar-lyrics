@@ -92,7 +92,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.2.5"
+APP_VERSION = "1.2.6"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -354,6 +354,13 @@ class Win32Taskbar:
         _user32.WindowFromPoint.restype = wintypes.HWND
         _user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
         _user32.GetAncestor.restype = wintypes.HWND
+        _user32.EnumWindows.restype = wintypes.BOOL
+        _user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        _user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        _user32.EnumDisplayMonitors.restype = wintypes.BOOL
+        _user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+        _user32.MonitorFromPoint.restype = ctypes.c_void_p
+        _dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
     except AttributeError:  # pragma: no cover - 极端精简系统
         pass
     # GDI 截图：一次 BitBlt 抓取整条任务栏，避免逐像素 GetPixel 太慢卡住 UI
@@ -489,7 +496,10 @@ class Win32Taskbar:
         monitor = cls.monitor_rect(hwnd)
         if window_rect is None or monitor is None:
             return False
-        return core.rect_covers_monitor(window_rect, monitor, tolerance=2) or cls.shell_d3d_fullscreen()
+        primary = cls.primary_monitor_rect()
+        if primary is not None and monitor != primary:
+            return False  # 只关心主显示器
+        return core.rect_covers_monitor(window_rect, primary or monitor, tolerance=2) or cls.shell_d3d_fullscreen()
 
     @classmethod
     def window_at(cls, x: int, y: int) -> int:
@@ -516,6 +526,83 @@ class Win32Taskbar:
         if not hwnd or not taskbar:
             return False
         return cls.window_root(hwnd) == taskbar
+
+    @classmethod
+    def primary_monitor_rect(cls) -> Optional[Tuple[int, int, int, int]]:
+        """主显示器的物理像素矩形。"""
+        try:
+            monitor = cls._user32.MonitorFromPoint(wintypes.POINT(0, 0), 1)  # PRIMARY
+            if not monitor:
+                return None
+            info = _MonitorInfo()
+            info.cbSize = ctypes.sizeof(_MonitorInfo)
+            if not cls._user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+                return None
+            rect = info.rcMonitor
+            return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
+        except Exception:  # noqa: BLE001
+            return None
+
+    @classmethod
+    def has_primary_fullscreen_window(cls, exclude_hwnd: int = 0) -> bool:
+        """主显示器上是否有窗口铺满（不要求它是前台窗口）。
+
+        只关心主屏：副屏全屏不影响主屏任务栏组件的显示。
+        从 z 序最上层往下找，碰到桌面（Progman/WorkerW）就停止，
+        避免把桌面壁纸/装饰层当成全屏窗口。
+        """
+        primary = cls.primary_monitor_rect()
+        if primary is None:
+            return False
+        found = [False]
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def callback(hwnd, lparam):  # noqa: ANN001
+            if found[0]:
+                return False
+            try:
+                if not hwnd or hwnd == exclude_hwnd:
+                    return True
+                name = cls.class_name(hwnd)
+                if name in ("Progman", "WorkerW"):
+                    return False  # 到桌面为止，再往下都是桌面级别的窗口
+                if name in ("Shell_TrayWnd", "Shell_SecondaryTrayWnd"):
+                    return True
+                if not cls._user32.IsWindowVisible(hwnd) or cls._user32.IsIconic(hwnd):
+                    return True
+                pid = wintypes.DWORD()
+                cls._user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value == os.getpid():
+                    return True
+                if cls._is_cloaked(hwnd):
+                    return True
+                window_rect = cls.rect(hwnd)
+                monitor = cls.monitor_rect(hwnd)
+                if window_rect is None or monitor is None:
+                    return True
+                if monitor != primary:
+                    return True
+                if core.rect_covers_monitor(window_rect, primary, tolerance=2):
+                    found[0] = True
+                    return False
+                return True
+            except Exception:  # noqa: BLE001
+                return True
+
+        cls._user32.EnumWindows(callback_type(callback), 0)
+        return found[0]
+
+    @classmethod
+    def _is_cloaked(cls, hwnd: int) -> bool:
+        """UWP 隐藏窗口（cloaked）不算可见窗口。"""
+        try:
+            value = wintypes.DWORD(0)
+            result = cls._dwmapi.DwmGetWindowAttribute(
+                wintypes.HWND(hwnd), 14, ctypes.byref(value), ctypes.sizeof(value)  # DWMWA_CLOAKED
+            )
+            return result == 0 and bool(value.value & 1)
+        except Exception:  # noqa: BLE001
+            return False
 
     @classmethod
     def _child_by_class(cls, parent: int, class_name: str) -> int:
@@ -2028,9 +2115,25 @@ class TaskbarWidget(QWidget):
                 self._restore_from_fullscreen()
             return
 
-        fullscreen = Win32Taskbar.is_foreground_fullscreen(int(self.winId()))
-        if not fullscreen:
-            fullscreen = self._taskbar_covered_by_other()
+        fg_fullscreen = Win32Taskbar.is_foreground_fullscreen(int(self.winId()))
+        taskbar_covered = False if fg_fullscreen else self._taskbar_covered_by_other()
+        primary_fullscreen = (
+            False
+            if (fg_fullscreen or taskbar_covered)
+            else Win32Taskbar.has_primary_fullscreen_window(int(self.winId()))
+        )
+        debug = (fg_fullscreen, taskbar_covered, primary_fullscreen)
+        force_debug = os.environ.get("TASKBAR_FS_DEBUG") == "1"
+        if force_debug or debug != getattr(self, "_last_fs_debug", None):
+            self._last_fs_debug = debug
+            LOGGER.info(
+                "全屏检测：前台全屏=%s 主任务栏被覆盖=%s 主屏有全屏窗口=%s（定时器=%s）",
+                fg_fullscreen,
+                taskbar_covered,
+                primary_fullscreen,
+                self.fullscreen_timer.isActive() if hasattr(self, "fullscreen_timer") else "无",
+            )
+        fullscreen = fg_fullscreen or taskbar_covered or primary_fullscreen
         if fullscreen:
             self._fullscreen_true_streak += 1
             self._fullscreen_false_streak = 0
