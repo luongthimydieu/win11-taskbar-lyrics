@@ -92,7 +92,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.2.6"
+APP_VERSION = "1.2.7"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -1539,6 +1539,10 @@ class TaskbarWidget(QWidget):
         """按配置把窗口嵌入任务栏（embed）或置顶覆盖（overlay）。"""
         if self.selftest:
             return
+        # 全屏隐藏/用户手动隐藏期间不要重排：move_* 里带 SWP_SHOWWINDOW，
+        # 会把刚隐藏的窗口又显示出来（表现为“隐藏后又闪一下/一直闪”）
+        if self._hidden_for_fullscreen or self._user_hidden:
+            return
         target = self._taskbar_target()
         if target is None:
             self._fall_back_to_screen()
@@ -1651,6 +1655,17 @@ class TaskbarWidget(QWidget):
 
     def ensure_taskbar_position(self) -> None:
         """每 5 秒检查：任务栏句柄/矩形变化、图标占用、主题切换时自动重新贴合。"""
+        self._refresh_taskbar_position()
+
+    def _refresh_taskbar_position(self) -> None:
+        if self.selftest:
+            return
+        # 全屏隐藏 / 用户手动隐藏期间什么都别做：
+        # 下面的 move_topmost 会带 SWP_SHOWWINDOW，会把隐藏的窗口重新显示出来
+        if self._hidden_for_fullscreen or self._user_hidden:
+            return
+        if not self.isVisible() and not self._hidden_for_space:
+            return
         taskbar = Win32Taskbar.find()
         rect = Win32Taskbar.rect(taskbar) if taskbar else None
         if not taskbar or rect is None:
