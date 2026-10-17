@@ -85,25 +85,40 @@ git config user.email "你的GitHub邮箱"
 git rebase --root --exec "git commit --amend --reset-author --no-edit"
 ```
 
-## 6. 可选：把整个项目（桌面端 + 文档）另推一个仓库做备份
+## 6. 推送“完整项目”仓库（桌面端 + 文档 + tests + 手机端页面源码）
 
-先把 `github-pages` 里的嵌套 `.git` 临时移走，否则外层 Git 会把它当成 submodule 引用：
+> 手机端部署仓库（`taskbar-todo`）已经推送成功（远程 `main` = 本地 `3e77807`）。
+> 完整项目源码建议再建一个**私有仓库**；`github-pages/` 作为普通文件收录，同时它自己仍是独立的 Pages 仓库（两边互不影响）。
+
+**第 1 步：在 github.com 新建一个空仓库**（不要勾 README / .gitignore / license）：
+
+- Repository name：`win11-taskbar-lyrics`
+- Visibility：**Private**（推荐）
+- 直接 Create。
+
+**第 2 步：推送（本机仓库已初始化并提交好，只差远程推送）**
 
 ```bash
 cd "/g/deepseek harness/win11-taskbar-lyrics"
-mv github-pages/.git /tmp/taskbar-pages-git   # Git Bash 的 /tmp 可用；也可换成别的路径
 
-git init -b main
-git add -A
-git commit -m "chore: Win11 任务栏歌词/热评/跨端待办项目 v1.1"
-git remote add origin https://github.com/<你的用户名>/<项目仓库名>.git
+# 确认远程（默认已配好；仓库名改了就用 set-url 改一下）
+git remote -v
+git remote set-url origin https://github.com/luongthimydieu/win11-taskbar-lyrics.git
+
+# 推送 main
 git push -u origin main
-
-# 恢复手机端部署包的独立仓库
-mv /tmp/taskbar-pages-git github-pages/.git
 ```
 
-推完后建议两个仓库分开维护：`github-pages` 仓库只放静态页面用于 Pages，项目仓库用于备份代码与文档。
+**认证**：用户名 `luongthimydieu`，密码用 classic PAT（勾 `repo` 权限，和第 0 步相同）。
+
+**第 3 步（可选）：给仓库加资料**
+
+- About 描述：`Win11 任务栏歌词 + 网易云精选热评 + 跨端待办（GitHub Gist 同步）`
+- Topics：`windows11` `pyqt6` `taskbar` `lyrics` `netease` `pwa` `github-pages` `gist`
+
+> 注意：`desktop/dist/`、`desktop/build/`、`__pycache__/` 已被 `.gitignore` 排除，不会把 exe / 缓存传上去；要发 exe 用 GitHub Release 上传。
+
+推完后两个仓库分开维护：`github-pages` 仓库只放静态页面用于 Pages；`win11-taskbar-lyrics` 仓库放完整源码与文档。
 
 ## 7. 其他说明
 

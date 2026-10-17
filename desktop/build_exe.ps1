@@ -10,7 +10,8 @@
 #>
 param(
     [string]$Python = "python",
-    [switch]$OneFile
+    [switch]$OneFile,
+    [string]$Icon = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,17 +34,40 @@ $pyInstallerArgs = @(
     "--collect-submodules", "PyQt6.QtCore"
 )
 if ($OneFile) { $pyInstallerArgs += "--onefile" } else { $pyInstallerArgs += "--onedir" }
+if ($Icon -and (Test-Path -LiteralPath $Icon)) {
+    $pyInstallerArgs += @("--icon", (Resolve-Path -LiteralPath $Icon).Path)
+    Write-Host "使用图标：$Icon" -ForegroundColor DarkGray
+}
 
-# 当前环境装了哪个媒体后端，就把哪个整体收集进包
-& $Python -c "import winsdk" 2>$null
+# 当前环境装了哪个媒体后端，就把哪个整体收集进包。
+# 注意：这里用 cmd 静默探测，避免 PowerShell 把 Python 的 stderr/ImportError 当成脚本错误。
+cmd /c "`"$Python`" -c `"import winsdk`" >nul 2>&1"
 if ($LASTEXITCODE -eq 0) {
     Write-Host "检测到 winsdk，打包时一并收集" -ForegroundColor DarkGray
     $pyInstallerArgs += @("--collect-all", "winsdk")
 }
-& $Python -c "import winrt" 2>$null
+cmd /c "`"$Python`" -c `"import winrt`" >nul 2>&1"
 if ($LASTEXITCODE -eq 0) {
     Write-Host "检测到 pywinrt(winrt)，打包时一并收集" -ForegroundColor DarkGray
     $pyInstallerArgs += @("--collect-all", "winrt")
+}
+
+# Anaconda 环境的 Python 扩展模块依赖 Library\bin 下一些非系统 DLL（ffi.dll、
+# libcrypto/libssl 等），PyInstaller 不一定自动收集；缺了会在启动时报
+# "DLL load failed while importing _ctypes" 之类错误，这里显式补进去。
+$prefixFile = Join-Path $env:TEMP "taskbar_py_prefix.txt"
+cmd /c "`"$Python`" -c `"import sys; print(sys.prefix)`" > `"$prefixFile`" 2>nul"
+if (Test-Path -LiteralPath $prefixFile) {
+    $pyPrefix = (Get-Content -LiteralPath $prefixFile -TotalCount 1).Trim()
+    Remove-Item -LiteralPath $prefixFile -ErrorAction SilentlyContinue
+    $condaBin = Join-Path $pyPrefix "Library\bin"
+    foreach ($dllName in @("ffi.dll", "libssl-3-x64.dll", "libcrypto-3-x64.dll", "libbz2.dll", "liblzma.dll", "libexpat.dll", "sqlite3.dll")) {
+        $candidate = Join-Path $condaBin $dllName
+        if (Test-Path -LiteralPath $candidate) {
+            $pyInstallerArgs += @("--add-binary", "$candidate;.")
+            Write-Host "补充 DLL：$dllName" -ForegroundColor DarkGray
+        }
+    }
 }
 
 $pyInstallerArgs += "taskbar_widget.py"

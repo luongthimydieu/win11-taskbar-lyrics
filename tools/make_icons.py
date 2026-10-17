@@ -91,10 +91,28 @@ def build_icon(size: int, opaque: bool = False) -> Image.Image:
     return icon
 
 
+def _fit_square(image: Image.Image, size: int) -> Image.Image:
+    """把任意尺寸图片居中裁成正方形并缩放到目标尺寸。"""
+    image = image.convert("RGBA")
+    width, height = image.size
+    side = min(width, height)
+    left = (width - side) // 2
+    top = (height - side) // 2
+    cropped = image.crop((left, top, left + side, top + side))
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    return cropped.resize((size, size), resample)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="生成 PWA 图标")
     default_out = Path(__file__).resolve().parent.parent / "github-pages"
     parser.add_argument("--out", type=Path, default=default_out, help="输出目录")
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=None,
+        help="用现成的 PNG 生成（例如 AI 生成的 logo），默认用内置绘制",
+    )
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -104,7 +122,17 @@ def main() -> None:
         ("apple-touch-icon.png", 180, True),
     )
     for filename, size, opaque in targets:
-        icon = build_icon(size, opaque=opaque)
+        if args.source is not None:
+            if not args.source.exists():
+                raise SystemExit(f"找不到源文件：{args.source}")
+            with Image.open(args.source) as source:
+                icon = _fit_square(source, size)
+                if opaque:
+                    background = Image.new("RGBA", icon.size, (15, 23, 42, 255))
+                    background.alpha_composite(icon)
+                    icon = background
+        else:
+            icon = build_icon(size, opaque=opaque)
         path = args.out / filename
         icon.save(path, "PNG", optimize=True)
         print(f"已生成 {path} ({size}x{size})")

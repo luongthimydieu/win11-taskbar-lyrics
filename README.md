@@ -134,7 +134,10 @@ Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\conf
 | 前端同步协议测试 | `node tests/test_web_protocol.js` | CMD（Node 18+） |
 | 一键跑全部离线验证 | `powershell -ExecutionPolicy Bypass -File tests\run_all.ps1` | PowerShell（5.1+ 实测可用） |
 | 重新生成 PWA 图标 | `python tools\make_icons.py` | CMD |
+| 用 AI 生成的 PNG 生成 PWA 图标 | `python tools\make_icons.py --source logo.png` | CMD |
+| PNG 转多尺寸 .ico（exe/快捷方式图标） | `python tools\make_ico.py desktop\logo.png desktop\logo.ico` | CMD |
 | 打包成 exe | `powershell -ExecutionPolicy Bypass -File desktop\build_exe.ps1` | PowerShell |
+| 打包成 exe（自定义图标） | `powershell -ExecutionPolicy Bypass -File desktop\build_exe.ps1 -Icon desktop\logo.ico` | PowerShell |
 | 单文件 exe | `powershell -ExecutionPolicy Bypass -File desktop\build_exe.ps1 -OneFile` | PowerShell |
 | 设置开机自启 | `powershell -ExecutionPolicy Bypass -File desktop\install_autostart.ps1` | PowerShell |
 | 取消开机自启 | `powershell -ExecutionPolicy Bypass -File desktop\install_autostart.ps1 -Uninstall` | PowerShell |
@@ -159,6 +162,9 @@ Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\conf
 | 任务栏显示（真机） | 启动后截图 + `last_text.json` | 置顶覆盖模式，窗口 17–577、白色文字显示在任务栏左侧空位、不遮图标 |
 | 实时刷新（真机） | 间隔 8 秒两次截图 | 歌词从 `And all the clubs…` 变为 `You think you broke my heart…`，副行在“精选热评”与“📋 下一项待办”之间切换 |
 | 热评筛选（真机） | `last_text.json` 的 secondary | 显示「加拿大有三宝…」等精选评论，水评/广告被过滤 |
+| exe 打包（真机） | `build_exe.ps1`（onedir） | 产物 `desktop\dist\Win11TaskbarLyrics\` 约 130.5 MB；`Win11TaskbarLyrics.exe --selftest` 退出码 0 |
+| exe 运行（真机） | 安装到 `%LOCALAPPDATA%\Programs\Win11TaskbarLyrics` 并启动 | 任务栏正常显示白字歌词/下一项；约 153 MB 工作集、81 MB 私有内存、14 线程、1180 句柄，空闲 CPU <1% |
+| 开机自启（真机） | `install_autostart.ps1 -ExePath ...` | 启动文件夹快捷方式指向安装目录 exe、工作目录正确；下次登录自动启动 |
 | Service Worker 语法 | `node --check github-pages/sw.js` | 通过 |
 | 无界面烟测 | `python desktop/taskbar_widget.py --selftest` | `MEDIA_BACKEND=winsdk` + `SELFTEST OK`（exit 0） |
 | 一键验证脚本 | `powershell -ExecutionPolicy Bypass -File tests\run_all.ps1` | 全部验证通过（Windows PowerShell 5.1 实测） |
@@ -176,6 +182,7 @@ Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\conf
 | [04 常见问题](docs/04-常见问题.md) | 歌词/热评、媒体后端、任务栏吸附、同步报错、Token 吊销、限流等 |
 | [05 更新日志](docs/05-更新日志.md) | v1.2.1 / v1.2.0 / v1.1.0 变更对照与升级注意事项 |
 | [06 打包与开机自启](docs/06-打包与开机自启.md) | `build_exe.ps1`、`install_autostart.ps1`、启动文件夹原理、打包排错 |
+| [Logo 提示词](docs/LOGO_PROMPT.md) | 给 GPT / DALL·E 的项目图标、横幅提示词，以及 ICO / PWA 图标生成步骤 |
 
 v1.0 的原始文件保存在 `reference/`（`original_taskbar_widget.py`、`original_index.html`），只用于对照，不参与运行。
 
@@ -188,6 +195,7 @@ v1.0 的原始文件保存在 `reference/`（`original_taskbar_widget.py`、`ori
 - **媒体后端不是万能的**：没有 `winsdk`/`pywinrt` 时只能读网易云窗口标题，歌词按单调时钟估算推进，暂停或拖动进度条后可能对不上；装了 SMTC 后端才会精确跟随。
 - **仅支持 Windows 11**：任务栏矩形、SMTC、命名互斥量都是 Windows API；手机端需要支持 Service Worker 的现代浏览器（iOS Safari、Android Chrome 均可）。
 - **数据规模**：Gist 单文件读取超过 1MB 会被 GitHub 截断，程序会报「内容被截断」，建议定期「清除已完成」。
+- **资源占用**：PyQt6 桌面端常驻约 **150 MB 工作集**（Qt6 是主要部分，私有内存约 80 MB），空闲 CPU 约 <1%；打包 exe 与源码版基本一致（onedir 目录约 130 MB）。内存特别紧张时可改用更轻的 GUI 方案，但 Qt 本身占大头，压缩空间有限。
 - **混用版本会丢墓碑**：v1.0 不认识 `tombstones`，v1.0 与 v1.1 客户端同时写同一个 Gist 时，删除记录可能被覆盖；升级时请两端一起更新。
 - **提醒在电脑端**：手机端只展示「已到点/已提醒」状态，浏览器页面关闭后不会弹系统通知。
 

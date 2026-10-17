@@ -33,6 +33,7 @@ $workingDir = $PSScriptRoot
 if ($ExePath) {
     if (-not (Test-Path -LiteralPath $ExePath)) { throw "找不到指定的 exe：$ExePath" }
     $target = (Resolve-Path -LiteralPath $ExePath).Path
+    $workingDir = Split-Path -Parent $target
     $arguments = ""
 } else {
     $scriptPath = Join-Path $PSScriptRoot "taskbar_widget.py"
