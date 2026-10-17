@@ -59,6 +59,10 @@ def upload_asset(repo: str, release_id: int, token: str, path: Path, content_typ
 
 
 def main() -> None:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 - 老版本 Python/重定向场景忽略
+        pass
     parser = argparse.ArgumentParser(description="发布 GitHub Release")
     parser.add_argument("--repo", default=DEFAULT_REPO, help=f"owner/repo，默认 {DEFAULT_REPO}")
     parser.add_argument("--tag", required=True, help="例如 v1.2.2（本地 tag 最好已推送）")
@@ -110,7 +114,7 @@ def main() -> None:
     if sha_file.exists() and sha_file.name not in existing:
         upload_asset(args.repo, release_id, token, sha_file, "text/plain")
 
-    print("发布完成 ✅", flush=True)
+    print("发布完成 OK", flush=True)
     print(f"下载页：https://github.com/{args.repo}/releases/tag/{args.tag}")
 
 
