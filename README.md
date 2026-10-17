@@ -4,7 +4,7 @@
 
 > Logo：磨砂玻璃音乐清单 · 已用于 exe 图标、托盘/窗口图标与手机 PWA 图标。
 >
-> 📦 Windows 免安装版下载：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.2.6>
+> 📦 Windows 免安装版下载：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.2.7>
 
 把 Windows 11 任务栏的空白处变成一条“长在任务栏上”的信息条：主行跟着网易云音乐滚动逐行歌词，副行轮播**精选的有意思热评**与**下一项待办**；到点提醒时整条变红并呼吸闪烁，左键一点就完成并回写云端。手机端是一个可添加到主屏幕的静态 PWA，在外面随手记一条待办，电脑端 30 秒内就能看到。
 
