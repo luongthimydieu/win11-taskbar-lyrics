@@ -1,16 +1,16 @@
 # 07 发布 exe 到 GitHub Release
 
-> ✅ **最新 v1.2.4 已发布（2026-10-17）**
+> ✅ **最新 v1.2.5 已发布（2026-10-17）**
 >
-> - Release 页面：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.2.4>
-> - 直接下载：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/download/v1.2.4/Win11TaskbarLyrics-v1.2.4-onedir.zip>
-> - SHA256：`791A03EE39F440DD4905FF235F5622E1FA4F643C65466E0E944E31D76DF79914`
+> - Release 页面：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.2.5>
+> - 直接下载：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/download/v1.2.5/Win11TaskbarLyrics-v1.2.5-onedir.zip>
+> - SHA256：`CA9D11A5FE1C4EEDA148CE3F781D671C36117BA8FDB6A822C737788F7A5AA2BE`
 >
-> 历史版本：v1.2.3（全屏隐藏）、v1.2.2（每日待办节奏）仍保留在 Releases 页面。
+> 历史版本：v1.2.4（修复闪烁）、v1.2.3（全屏隐藏）、v1.2.2（每日待办节奏）仍保留在 Releases 页面。
 >
 > 注意：`win11-taskbar-lyrics` 目前是**私有仓库**，Release 只有你自己/协作者能下载；想让别人直接下载就把仓库改成 Public，或把 zip 单独发给对方。
 
-本文把 `desktop/dist/Win11TaskbarLyrics-v1.2.2-onedir.zip` 发布到 GitHub 的 Releases 页面，让别人可以直接下载使用。
+本文把 `desktop/dist/Win11TaskbarLyrics-v1.2.5-onedir.zip` 发布到 GitHub 的 Releases 页面，让别人可以直接下载使用。
 
 ## 0. 先确认两件事
 
