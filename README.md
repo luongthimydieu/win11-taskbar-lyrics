@@ -1,243 +1,279 @@
-# Win11 任务栏歌词 + 网易云高赞热评 + 手机端跨端待办（v1.3.0）
+# Win11 Taskbar Lyrics
 
-<img src="desktop/logo.png" alt="项目 Logo" width="96" align="right" />
+<p align="center">
+  <img src="desktop/logo.png" alt="Win11 Taskbar Lyrics Logo" width="96" />
+</p>
 
-> Logo：磨砂玻璃音乐清单 · 已用于 exe 图标、托盘/窗口图标与手机 PWA 图标。
->
-> 📦 Windows 免安装版下载：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.3.0>
+<h3 align="center">让 Windows 11 任务栏显示歌词、网易云热评和下一项待办</h3>
 
-把 Windows 11 任务栏的空白处变成一条“长在任务栏上”的信息条：主行跟着网易云音乐滚动逐行歌词，副行轮播**精选的有意思热评**与**下一项待办**；到点提醒时整条变红并呼吸闪烁，左键一点就完成并回写云端。手机端是一个可添加到主屏幕的静态 PWA，在外面随手记一条待办，电脑端 30 秒内就能看到。
+<p align="center">
+  <a href="https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.3.0">下载 v1.3.0</a>
+  ·
+  <a href="#快速开始">快速开始</a>
+  ·
+  <a href="#常见问题">常见问题</a>
+</p>
 
-v1.2.1 起桌面端默认使用「置顶覆盖 + 任务栏背景截图」把文字贴合在任务栏左侧空位（不遮图标、整块可点击），并把 `SetParent` 嵌入保留为实验选项；v1.2.2 加入每日待办节奏（22:00 提醒填明天、凌晨 2:00 自动翻篇）；v1.3.0 加入目标完成日期、AI 复杂任务拆解、每日记账、每周 Gmail 周报与每日记忆推送。
+把 Windows 11 任务栏的空白区域变成一条轻量的信息栏：主行跟随网易云音乐显示逐行歌词，副行轮播精选热评与下一项待办。待办到点后会触发醒目的提醒，点击即可完成并同步到云端。
 
-整个项目**不需要自建服务器、不需要域名、不需要数据库**：手机端跑在 GitHub Pages 上，数据放在你自己账号的一个私密 GitHub Gist 里，Windows 端用 PyQt6 读取并轮询。
+项目还提供一个可添加到手机主屏幕的 PWA 待办页面。手机端添加的待办会通过 GitHub Gist 同步到电脑端，通常在下一次轮询后更新。
 
-## 项目亮点
+**当前版本：v1.3.0**
 
-| 亮点 | 说明 |
+> **Windows 免安装版：** [前往 GitHub Releases 下载](https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.3.0)
+
+## 功能一览
+
+- **任务栏歌词**：在任务栏左侧空位显示当前歌曲的逐行歌词。
+- **网易云音乐热评**：从歌曲热门评论中筛选较有内容的短评，过滤常见水评、广告和纯表情评论。
+- **跨端待办同步**：手机端和 Windows 桌面端共享同一份 Gist 待办数据。
+- **到点提醒**：到达提醒时间后突出显示待办；支持稍后 10 分钟提醒，并通过云端状态避免重复提醒。
+- **每日待办节奏**：22:00 后新增的待办归入次日；凌晨 2:00 进行日期切换；每天 22:00 提醒填写明天的待办。
+- **目标完成日期（v1.3.0）**：每条待办可指定未来某天完成；任务栏显示「今天 / 明天 / MM-DD / 逾期」，未来任务不会提前占用今天。
+- **AI 拆解复杂任务（v1.3.0）**：右键「🤖 AI 拆解复杂任务」，调用 OpenAI 兼容 API 拆成带日期、带预计耗时的子任务，自动建立父子关系并显示 `[done/total]` 进度。
+- **每日记账（v1.3.0）**：记录收入/支出（分类、备注），账本独立存私密 Gist；右键「📒 本周账本」查看本周收入/支出/结余与明细。
+- **每周邮件周报（v1.3.0）**：Gmail 自动发送（默认周日 21:00），含完成/未完成/逾期/子任务/改进建议/账单汇总与明细 + AI 评价。
+- **每日记忆推送（v1.3.0）**：每天 23:30 把当日完成情况、账单与 AI 评价推到私有仓库 `taskbar-memory`（`memories/YYYY-MM-DD.md` + `index.json`）。
+- **任务栏适配**：默认采用置顶覆盖与任务栏背景截图的方式，尽量与任务栏外观保持一致，并避开系统图标。
+- **全屏自动隐藏**：检测到全屏应用时自动隐藏组件，退出全屏后恢复。
+- **歌词同步微调**：可通过右键菜单调整歌词时间偏差。
+- **开机自启与系统托盘**：支持配置开机启动，并可从托盘菜单访问常用功能。
+- **异常诊断**：提供任务栏诊断、自检和日志，方便排查显示或同步问题。
+
+## 工作方式
+
+项目由 Windows 桌面端、手机端 PWA 和 GitHub Gist 云端数据组成：
+
+| 组件 | 技术与用途 |
 | --- | --- |
-| 零后端 | 手机端是纯静态页面，Gist 充当免费云数据库，GitHub Pages 托管前端，没有服务器要运维 |
-| 任务栏原生感 | 无边框、不进 Alt+Tab；默认**置顶覆盖 + 任务栏背景截图**，底色与任务栏逐像素一致、自动贴左侧空位并避开图标；右键可切「嵌入任务栏」（实验性） |
-| 歌词 + 热评 | 通过网易云非官方接口取 LRC 与热赞评论；接口失败只降级这两项，不影响待办与提醒 |
-| 歌词跟手 | SMTC 0.5 秒轮询 + 本地单调时间轴（SMTC 位置恒为 0 也能正常推进）；右键「🎶 歌词同步微调」可按 0.2/0.5 秒修正播放器/LRC 偏差（正数=歌词更早） |
-| 有意思的热评 | 从 hotComments 里过滤水评/广告/纯表情，优先挑“有故事/有情绪”的短评，轮播更慢、每首只留约 10 条 |
-| 只显示下一项待办 | 按你在手机端上传的顺序稳定显示“下一项”，完成一条自动顺延；不再在待办之间随机轮播 |
-| 目标完成日期 | 每条待办可指定未来某天完成；到期标签显示「今天/明天/MM-DD/逾期」，未来任务不会提前占用今天 |
-| AI 拆解复杂任务 | 右键「🤖 AI 拆解复杂任务」，调用 OpenAI 兼容 API（默认 DeepSeek）拆成带日期、带耗时的子任务，自动建立父子关系并显示 `[done/total]` 进度 |
-| 每日记账 | 右键「💰 记一笔」记录收入/支出（分类、备注），账本独立私密 Gist；本周收入/支出/结余一目了然 |
-| 每周周报邮件 | Gmail SMTP 自动发送（默认周日 21:00）：完成/未完成/逾期/子任务/改进建议/账单汇总与明细 + AI 评价 |
-| 每日记忆推送 | 每天 23:30 把当日完成情况、账单和 AI 评价推到私有仓库 `taskbar-memory`（`memories/YYYY-MM-DD.md` + `index.json`） |
-| 每日待办节奏 | **22:00 之后添加的待办自动算“明天”**；**凌晨 2:00 自动翻篇**到新的一天（0:00–1:59 仍算前一天）；**每天 22:00 电脑托盘提醒**你填写明天的待办（右键可关），手机端 22:00 后也会显示“明天的待办还没填”的提示 |
-| 全屏自动隐藏 | 看 B 站/网页视频按 F11、或运行全屏游戏时，自动隐藏任务栏组件，退出全屏 1 秒内恢复；可在右键菜单「🖥️ 全屏应用时自动隐藏」关闭 |
-| 不丢数据的同步 | schema v2：条目级 `updated_at` + 删除墓碑 `tombstones` + `version`，两端同一套 `mergeDocs`，写前先合并 |
-| 省额度的轮询 | 每 30 秒带 `If-None-Match` 请求，304 不计入 GitHub 限流额度 |
-| 可靠的到点提醒 | `remind_date` + 目标时刻 + 24 小时补提醒窗口 + 云端 `notified_at` 去重 + 稍后提醒 10 分钟 |
-| 双媒体后端 | 自动识别 `winsdk`（Python ≤3.11）或 `winrt-Windows.Media.Control`（Python 3.12+），都没有时退回窗口标题 |
-| 可测试 | `core.py` 不依赖 Qt，**227 个 Python 单测 + 46 个前端协议用例**；`tests/run_all.ps1` 可一键全跑 |
-| 工程化细节 | 单实例互斥量、系统托盘、滚动日志、原子写配置、每 5 秒检测任务栏几何变化 |
-| 可诊断 | 右键菜单「🩺 任务栏诊断」或 `--diagnose`，直接给出 Windows 版本、任务栏句柄、当前嵌入状态与子窗口结构 |
+| Windows 桌面端 | Python、PyQt6、Win32 API、Windows 媒体控制接口（SMTC） |
+| 手机端 | 原生 HTML、CSS、JavaScript、Service Worker |
+| 云端同步 | GitHub REST API 与私密 Gist |
+| 测试 | Python `unittest`、Node.js 前端协议测试 |
 
-## 组成与技术栈
+项目不需要自建服务器、购买域名或部署数据库。手机端页面可通过 GitHub Pages 托管，待办数据保存在你自己的 GitHub Gist 中，桌面端定期读取并同步。
 
-| 部分 | 技术 | 入口 |
-| --- | --- | --- |
-| Windows 任务栏端 | Python 3.10+ / PyQt6 / Win32 API / Windows SMTC | `desktop/taskbar_widget.py` |
-| 无界面核心层 | Python 标准库 + `requests` | `desktop/core.py` |
-| 手机端 PWA | 原生 HTML/CSS/JS + Service Worker + GitHub REST API | `github-pages/index.html` |
-| 云数据库 | 私密 GitHub Gist 中的 `taskbar_todos.json` | 由两端自动创建或手动填写 |
-| 测试与工具 | `unittest`、Node `vm`、Pillow | `tests/`、`tools/make_icons.py` |
+## 快速开始
 
-## 目录结构
+### 方案一：下载 Windows 免安装版
 
-```text
-win11-taskbar-lyrics/
-├── README.md
-├── docs/                  # 专题文档 01–08（连本 README 共 9 篇）
-├── desktop/               # Windows 任务栏端（Python + PyQt6）
-│   ├── core.py            # 无 Qt 依赖的核心层，可单元测试（schema v3 + 账本协议）
-│   ├── taskbar_widget.py  # UI / SMTC / 任务栏吸附 / 提醒 / 记账 / 周报 / 记忆
-│   ├── ai_client.py       # OpenAI 兼容 API：复杂任务拆解、每日/每周评价
-│   ├── reporting.py       # 周报邮件（Gmail SMTP）
-│   ├── memory_sync.py     # 每日记忆推送 GitHub 仓库
-│   ├── requirements.txt
-│   ├── install_deps.bat / run.bat
-│   ├── build_exe.ps1 / install_autostart.ps1
-├── github-pages/          # 需要推到 GitHub Pages 的那部分（部署包）
-│   ├── index.html / manifest.webmanifest / sw.js
-│   ├── icon-192.png / icon-512.png / apple-touch-icon.png
-│   ├── .nojekyll / README.md
-├── tests/                 # test_core.py / test_integrations.py（Python）+ test_web_protocol.js（Node）+ run_all.ps1
-├── tools/make_icons.py    # 生成 PWA 图标
-└── reference/             # v1.0 原始文件存档（仅供对照）
-```
+1. 打开 [GitHub Releases v1.3.0](https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.3.0)。
+2. 下载该版本提供的 Windows 压缩包并解压。
+3. 按发布包内的说明启动程序。
 
-## 三步快速开始
+如果只想在电脑上使用歌词、热评和本机功能，可以先启动桌面端；要使用手机与电脑之间的云端待办同步，还需要完成后文的绑定步骤。
 
-> 完整步骤、每一步的验证方法与两条 Python 环境路线见 [部署指南](docs/02-部署指南.md)。
+### 方案二：从源码运行
 
-### 第 1 步：部署手机端
+需要 Windows 11 和 Python 环境。建议使用 Python 3.10–3.11；该路线使用 `winsdk` 媒体后端。Python 3.12 及以上环境可根据依赖情况使用 `winrt-Windows.Media.Control`。
 
-1. 新建一个 GitHub 仓库（公开仓库的 Pages 免费），把 **`github-pages/` 目录里的文件**推送到仓库根目录；
-2. 仓库 **Settings → Pages → Deploy from a branch → main / (root)**，保存；
-3. 等 1–2 分钟，记下 `https://<你的用户名>.github.io/<仓库名>/`。
-
-细节（含 `.nojekyll`、私密仓库 Pages 限制、更新部署）见 [github-pages/README.md](github-pages/README.md)。
-
-> 为了方便交付，`github-pages/` 目录已经初始化好本地 Git 仓库并完成一次提交：你只需要 `git remote add origin <仓库地址>`，然后 `git push -u origin main`。想先把提交作者改成自己，可在该目录执行 `git config user.name/user.email` 后 `git commit --amend --reset-author --no-edit`。
-
-### 第 2 步：安装并启动电脑端
-
-在 **Anaconda Prompt** 中进入项目目录（本机 `python` 不在 PATH，必须用 Anaconda Prompt）：
+在项目目录打开终端，安装桌面端依赖：
 
 ```bat
-cd /d "G:\deepseek harness\win11-taskbar-lyrics\desktop"
-install_deps.bat
-run.bat
-```
-
-> 本机已经为这个项目创建好**专用 conda 环境 `taskbar-lyrics`**（Python 3.11.15 + PyQt6 6.11.0 + requests + winsdk，装好即用），推荐这样启动：
-
-```bat
-conda activate taskbar-lyrics
-cd /d "G:\deepseek harness\win11-taskbar-lyrics\desktop"
-python taskbar_widget.py
-```
-
-> 上面是 **CMD / Anaconda Prompt** 写法。如果你用的是 **PowerShell**：`cd /d` 会报“找不到接受实际参数”，把 `/d` 去掉即可 —— `cd "G:\deepseek harness\win11-taskbar-lyrics\desktop"`，或者不切目录直接 `python "G:\deepseek harness\win11-taskbar-lyrics\desktop\taskbar_widget.py"`。
-
-换机器或环境被删时，`install_deps.bat` 会装到**当前激活的 Python 环境**；也可以按版本手动重建路线（两条都实测可行）：
-
-```bat
-:: 路线 A：Python 3.10–3.11（winsdk 有对应轮子）
-conda create -n taskbar-lyrics python=3.11 -y
-conda activate taskbar-lyrics
-cd /d "G:\deepseek harness\win11-taskbar-lyrics\desktop"
+cd desktop
 python -m pip install -r requirements.txt
 python taskbar_widget.py
 ```
 
-```bat
-:: 路线 B：Python 3.13（winsdk 无 cp313 轮子，改用 pywinrt 拆分包）
-python -m pip install PyQt6 requests winrt-Windows.Media.Control
-python taskbar_widget.py
-```
+如果系统无法直接调用 `python`，请先打开已配置好 Python 的终端，或使用 Anaconda Prompt 激活对应环境。
 
-启动后任务栏上会出现胶囊；没有配置云同步时，它会先显示本机待办与歌词。无界面自检：
+运行无界面自检：
 
 ```bat
 python taskbar_widget.py --selftest
 ```
 
-### 第 3 步：两端绑定同一组 Token + Gist ID
+更完整的环境配置、部署验证和排错步骤，请查看[部署指南](docs/02-部署指南.md)。
 
-1. 手机浏览器打开 Pages 地址 → 右上角「未配置」→ 填 GitHub Token（classic，勾选 `gist`）→ 点「创建新 Gist」→「保存并同步」；
-2. 在电脑端右键任务栏胶囊 →「⚙️ 配置 GitHub Gist 云同步」→ 填**同一个 Token 和 Gist ID** →「测试连接」→ 保存；
-3. 手机端加一条待办，等 30 秒（或右键「🔄 立即同步」），胶囊副行就会出现它。
+## 配置手机端与云端同步
 
-Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\config.json`，手机端在浏览器 `localStorage`，都不会写进 Git 仓库。
+手机端使用 GitHub Pages 托管，云端数据存放在你自己的私密 Gist 中。
 
-### 第 4 步：AI / 周报 / 记忆 / 账本（v1.3.0，可选）
+### 第一步：部署手机端页面
 
-1. 右键任务栏胶囊 →「⚙️ AI / 邮件 / 记忆设置」；
-2. **AI**：填 OpenAI 兼容 API 的 Base URL（默认 `https://api.deepseek.com`）、模型（默认 `deepseek-chat`）和 API Key，点「测试 AI」；
-3. **周报邮件**：Gmail 发件邮箱 + **应用专用密码**（在 Google 账号 → 安全性 → 两步验证 → 应用专用密码 生成），设置发送星期/时间，点「发送测试邮件」；
-4. **记忆仓库**：仓库默认 `luongthimydieu/taskbar-memory`，填一个带 `repo` 写权限的 Token，点「测试记忆仓库」；每天 23:30 自动推送；
-5. **账本**：点「创建账本 Gist」生成独立账本（也用于手机端账本同步），之后右键「💰 记一笔」即可；手机端的账本 Gist ID 可在 PWA 配置里填同一个。
+1. 创建一个 GitHub 仓库。
+2. 将项目 `github-pages/` 目录中的文件放到该仓库根目录。
+3. 打开仓库的 **Settings → Pages**，选择 **Deploy from a branch**，并设置为 `main` 分支的根目录 `/ (root)`。
+4. 等待 GitHub Pages 部署完成，记下页面地址，格式通常为：
 
-> AI / Gmail / 记忆 Token 都只保存在本机 `config.json`，不会提交到仓库。没有配置 AI 时，待办、记账、记忆仍可正常用，只是不会自动拆解/评价。
+   `https://<你的用户名>.github.io/<仓库名>/`
 
-## 常用命令
+私密仓库的 Pages 可用性可能受 GitHub 方案和仓库设置影响；如无法部署，可使用公开仓库托管静态页面。更多说明见 [`github-pages/README.md`](github-pages/README.md)。
 
-以下命令默认在项目根目录执行；标注 **CMD** 的用命令提示符/`.bat`，标注 **PowerShell** 的用 PowerShell。找不到 `python` 时先打开 Anaconda Prompt 并激活环境。
+### 第二步：创建 Gist 并配置手机端
 
-| 用途 | 命令 | 环境 |
-| --- | --- | --- |
-| 启动任务栏胶囊 | `python desktop\taskbar_widget.py` | CMD / PowerShell |
-| 前台启动并保留控制台 | `desktop\run.bat` | CMD |
-| 安装桌面端依赖 | `desktop\install_deps.bat` | CMD（Anaconda Prompt） |
-| 无界面烟测 | `python desktop\taskbar_widget.py --selftest` | CMD |
-| 任务栏诊断 | `python desktop\taskbar_widget.py --diagnose` | CMD（报“没嵌进去/位置不对”时先跑这个） |
-| 核心层单元测试 | `python -m unittest discover -s tests -v` | CMD |
-| 前端同步协议测试 | `node tests/test_web_protocol.js` | CMD（Node 18+） |
-| 一键跑全部离线验证 | `powershell -ExecutionPolicy Bypass -File tests\run_all.ps1` | PowerShell（5.1+ 实测可用） |
-| 重新生成 PWA 图标 | `python tools\make_icons.py` | CMD |
-| 用 AI 生成的 PNG 生成 PWA 图标 | `python tools\make_icons.py --source logo.png` | CMD |
-| PNG 转多尺寸 .ico（exe/快捷方式图标） | `python tools\make_ico.py desktop\logo.png desktop\logo.ico` | CMD |
-| 打包成 exe | `powershell -ExecutionPolicy Bypass -File desktop\build_exe.ps1` | PowerShell（已内置 `logo.ico`，自动带图标） |
-| 打包成 exe（自定义图标） | `powershell -ExecutionPolicy Bypass -File desktop\build_exe.ps1 -Icon desktop\logo.ico` | PowerShell |
-| 单文件 exe | `powershell -ExecutionPolicy Bypass -File desktop\build_exe.ps1 -OneFile` | PowerShell |
-| 设置开机自启 | `powershell -ExecutionPolicy Bypass -File desktop\install_autostart.ps1` | PowerShell |
-| 取消开机自启 | `powershell -ExecutionPolicy Bypass -File desktop\install_autostart.ps1 -Uninstall` | PowerShell |
-| 打开数据目录 | `explorer %APPDATA%\Win11TaskbarLyrics` | CMD |
-| 查看日志尾部 | `Get-Content "$env:APPDATA\Win11TaskbarLyrics\app.log" -Tail 50 -Wait` | PowerShell |
-| 彻底重置本地 | `Remove-Item -Recurse -Force "$env:APPDATA\Win11TaskbarLyrics"` | PowerShell |
+1. 在手机浏览器中打开刚才部署的页面。
+2. 点击页面右上角的配置入口。
+3. 填入 GitHub Personal Access Token（classic），并确保授权范围包含 `gist`。
+4. 点击“创建新 Gist”，然后保存并同步。
 
-> `node tests/test_web_protocol.js` 会逐条打印用例结果（当前 46 个全部通过）；只要有失败，进程退出码就是 1，可直接作为 CI 门禁。`tests/run_all.ps1` 会把它和 Python 单测、语法检查、无界面烟测一起跑。
->
-> 重置前请先退出程序；删除 `%APPDATA%\Win11TaskbarLyrics` 只会清掉本机配置、缓存与日志，**不会删除云端 Gist 里的待办**。
+### 第三步：配置 Windows 桌面端
 
-## 验证结果（2026-10-17 本机实测）
+1. 启动桌面端程序。
+2. 右键点击任务栏信息栏，打开“配置 GitHub Gist 云同步”。
+3. 填入与手机端相同的 Token 和 Gist ID。
+4. 测试连接并保存。
 
-| 检查项 | 命令 | 结果 |
-| --- | --- | --- |
-| 桌面端语法编译 | `python -m py_compile desktop/core.py desktop/taskbar_widget.py` | 通过 |
-| 静态检查 | `python -m pyflakes desktop/core.py desktop/taskbar_widget.py tests/test_core.py tools/make_icons.py` | 0 告警 |
-| 核心层单元测试 | `python -m unittest discover -s tests -v` | 227 个用例通过（127 core + 100 integrations） |
-| 前端同步协议测试 | `node tests/test_web_protocol.js` | 46 个用例通过（含 DOM 引用、SW v4 资源静态检查、schema v3 与账本协议） |
-| 跨语言协议一致性 | 同一份文档分别交给 `core.canonical` 与 `P.canonical` | todo / ledger 指纹逐字节一致（v3） |
-| 目标日期 / 子任务（真机） | 添加带 due_date 的待办 + AI 拆解 | 任务栏显示「📅 明天」与父任务 `[done/total]` 进度 |
-| 记账 / 账本同步（真机） | 首次启动自动创建账本 Gist | `ledger_gist_id` 写入配置，账本独立同步到 `taskbar_ledger.json` |
-| 每日记忆（真机） | `memory_sync.push_daily_memory(...)` | 写入 `taskbar-memory/memories/2026-10-20.md` + `index.json`（已实际推送） |
-| 周报邮件（离线） | 真实数据调用 `weekly_report_data → build_weekly_email` | 生成 566 字 Markdown、1996 字节 HTML，未真实发送（待填 Gmail 应用密码） |
-| AI 规划（mock） | `tests/test_integrations.py` | JSON 解析、日期越界、请求失败等 100 个用例通过 |
-| 热评筛选（真实接口） | `core.NetEaseClient.fetch_song_bundle(...)` | 38 行歌词 + 10 条精选评论，水评/广告被过滤 |
-| 任务栏显示（真机） | 启动后截图 + `last_text.json` | 置顶覆盖模式，窗口 17–577、白色文字显示在任务栏左侧空位、不遮图标 |
-| 实时刷新（真机） | 间隔 8 秒两次截图 | 歌词从 `And all the clubs…` 变为 `You think you broke my heart…`，副行在“精选热评”与“📋 下一项待办”之间切换 |
-| 热评筛选（真机） | `last_text.json` 的 secondary | 显示「加拿大有三宝…」等精选评论，水评/广告被过滤 |
-| 每日节奏（实测） | Python/JS 单测 + 手动验证 | 21:59 添加算当天、22:00 添加算明天、次日 2:00 前仍显示前一天、22:05 未填明天时返回提醒/显示提示 |
-| 全屏自动隐藏（实测） | 启动源码版后开一个全屏窗口 | 日志出现「检测到全屏应用，暂时隐藏任务栏组件」，关闭全屏后出现「退出全屏，恢复任务栏组件」 |
-| exe 打包（真机） | `build_exe.ps1`（onedir） | 产物 `desktop\dist\Win11TaskbarLyrics\` 约 130.5 MB；`Win11TaskbarLyrics.exe --selftest` 退出码 0 |
-| exe 运行（真机） | 安装到 `%LOCALAPPDATA%\Programs\Win11TaskbarLyrics` 并启动 | 任务栏正常显示白字歌词/下一项；约 153 MB 工作集、81 MB 私有内存、14 线程、1180 句柄，空闲 CPU <1% |
-| 开机自启（真机） | `install_autostart.ps1 -ExePath ...` | 启动文件夹快捷方式指向安装目录 exe、工作目录正确；下次登录自动启动 |
-| Service Worker 语法 | `node --check github-pages/sw.js` | 通过 |
-| 无界面烟测 | `python desktop/taskbar_widget.py --selftest` | `MEDIA_BACKEND=winsdk` + `SELFTEST OK`（exit 0） |
-| 一键验证脚本 | `powershell -ExecutionPolicy Bypass -File tests\run_all.ps1` | 全部验证通过（Windows PowerShell 5.1 实测） |
+配置完成后，在手机端新增一条待办。桌面端通常会在下一次同步时显示它；也可以通过右键菜单手动触发立即同步。
 
-烟测环境：Windows 11、Python 3.11.15 + PyQt6 6.11.0 + winsdk 1.0.0b10（本机为本项目创建的专用 conda 环境 `taskbar-lyrics`），Node v24.18.0。
-说明：Anaconda base 的 Python 3.13.9 没有 PyQt6/winsdk；走 3.13 路线请用 `winrt-Windows.Media.Control`（已验证存在 cp313 轮子）。
+### 第四步（v1.3.0）：AI / 周报 / 记忆 / 账本
 
-## 文档索引
+右键任务栏信息栏 →「⚙️ AI / 邮件 / 记忆设置」：
 
-| 文档 | 内容 |
-| --- | --- |
-| [01 架构设计](docs/01-架构设计.md) | 数据流、模块分层、同步/提醒时序、关键取舍、安全边界 |
-| [02 部署指南](docs/02-部署指南.md) | 从零创建 Token、部署 Pages、两条 Python 路线、绑定、自启、升级与重置 |
-| [03 同步协议](docs/03-同步协议.md) | JSON schema、合并算法、canonical、ETag/HTTP、错误码、收敛举例、提醒语义 |
-| [04 常见问题](docs/04-常见问题.md) | 歌词/热评、媒体后端、任务栏吸附、同步报错、Token 吊销、限流等 |
-| [05 更新日志](docs/05-更新日志.md) | v1.3.0 待办/记账/周报/记忆、v1.2.x 系列变更与升级注意事项 |
-| [06 打包与开机自启](docs/06-打包与开机自启.md) | `build_exe.ps1`、`install_autostart.ps1`、启动文件夹原理、打包排错 |
-| [07 发布 exe](docs/07-发布exe到GitHub.md) | 把打包好的 zip 发到 GitHub Releases 的三种方法与发布前验证 |
-| [08 待办模块升级设计](docs/08-待办模块升级设计.md) | v1.3.0 数据契约：schema v3、账本 schema 1、AI/邮件/记忆模块接口 |
-| [Logo 提示词](docs/LOGO_PROMPT.md) | 给 GPT / DALL·E 的项目图标、横幅提示词，以及 ICO / PWA 图标生成步骤 |
+- **AI**：填 OpenAI 兼容 API 的 Base URL（默认 `https://api.deepseek.com`）、模型（默认 `deepseek-chat`）和 API Key；
+- **周报邮件**：Gmail 发件邮箱 + **应用专用密码**，默认周日 21:00 发送；
+- **记忆仓库**：私有仓库 `luongthimydieu/taskbar-memory` + 带 `repo` 写权限的 Token，每天 23:30 推送；
+- **账本**：点「创建账本 Gist」生成独立账本；手机端配置里填同一个「账本 Gist ID」即可跨端记账。
 
-v1.0 的原始文件保存在 `reference/`（`original_taskbar_widget.py`、`original_index.html`），只用于对照，不参与运行。
+> 以上凭据仅保存在本机 `config.json`，不会提交到仓库。详细排错见 [常见问题](docs/04-常见问题.md) 的「v1.3.0 新功能怎么配置」。
+
+## 隐私与安全
+
+- **Token 不应提交到 Git 仓库。** 桌面端配置保存在 `%APPDATA%\Win11TaskbarLyrics\config.json`，手机端配置保存在当前浏览器的 `localStorage`。
+- **私密 Gist 不等于加密。** 私密 Gist 不会公开列出，但知道 Gist 链接的人仍可能访问其中内容，GitHub 及拥有相应账号权限的主体也可能读取。
+- **不要把敏感信息写进待办。** 请勿保存密码、访问密钥、身份证号等高敏感数据。
+- **谨慎管理 Token。** 只授予必要权限；如果 Token 泄露，请及时在 GitHub 撤销并重新配置。
+- **手机端使用浏览器本地存储。** 清理浏览器数据可能导致本地保存的配置丢失，需要重新配置。
+
+## 任务栏显示说明
+
+桌面端默认采用“置顶覆盖 + 任务栏背景截图”方式显示文字，尽量贴合任务栏背景并避开系统图标。任务栏空间会动态变化，程序会定期检测可用区域；空间不足时，组件可能缩窄或暂时隐藏。
+
+右键菜单还提供“嵌入任务栏”的实验性选项。该模式在部分 Windows 11 版本上可能出现重绘问题，建议优先使用默认模式。
+
+当检测到全屏应用时，组件会自动隐藏，并在退出全屏后恢复。副屏任务栏目前不在支持范围内。
+
+## 常见问题
+
+### 1. 为什么没有显示歌词？
+
+可以按以下顺序检查：
+
+1. 确认网易云音乐正在播放歌曲。
+2. 检查当前歌曲是否能够正常获取歌词。
+3. 确认桌面端程序正在运行。
+4. 尝试通过右键菜单调整歌词时间偏差。
+5. 如果问题仍然存在，查看程序日志，并确认媒体控制后端是否正常工作。
+
+网易云音乐接口可能发生变化或受到限流，因此个别歌曲可能无法获取歌词。
+
+### 2. 为什么手机端新增的待办没有立即出现在电脑上？
+
+跨端同步采用定时轮询，不是实时推送。桌面端约每 30 秒检查一次云端数据。
+
+可以尝试：
+
+- 在桌面端右键菜单中手动触发同步。
+- 检查手机端和桌面端配置的 Gist ID 是否一致。
+- 检查 Token 是否有效，以及是否具有 `gist` 权限。
+- 检查网络连接和 GitHub API 是否可正常访问。
+
+### 3. GitHub Token 应该使用哪一种？
+
+根据当前项目配置流程，使用 GitHub Personal Access Token（classic），并确保授权范围包含 `gist`。
+
+**安全提示：** 不要将 Token 提交到公开仓库，也不要在 Issue、截图或日志中公开完整 Token。如果 Token 泄露，请立即撤销并重新配置。
+
+### 4. 私密 Gist 是否意味着待办内容已加密？
+
+不是。私密 Gist 主要用于限制公开发现，并不等同于端到端加密。请勿在待办中保存密码、访问密钥或其他敏感信息。
+
+### 5. 为什么歌词进度与实际播放进度不一致？
+
+歌词进度可能受到媒体控制后端、网易云音乐窗口状态和歌词时间轴的影响。
+
+可以尝试：
+
+- 检查媒体控制后端是否正常。
+- 通过右键菜单调整歌词时间偏差。
+- 确认使用的 Python 版本和依赖符合项目要求。
+
+如果当前环境无法使用 SMTC，程序可能退回读取网易云音乐窗口标题，此时歌词进度不一定能准确跟随暂停或拖动操作。
+
+### 6. 为什么全屏时任务栏歌词会消失？
+
+这是预期行为。程序检测到全屏应用时会自动隐藏组件，退出全屏后恢复，以减少对全屏内容的遮挡。
+
+### 7. 手机端页面关闭后，还会继续提醒吗？
+
+手机端主要用于查看、添加和同步待办。浏览器页面关闭后，该页面不会持续运行，也不会保证继续弹出系统通知。
+
+### 8. 清理浏览器数据后，为什么需要重新配置？
+
+手机端配置保存在当前浏览器的 `localStorage` 中。清理网站数据或更换浏览器后，Token 和 Gist 配置可能丢失，需要重新填写。
+
+### 9. 为什么旧版本客户端可能覆盖删除操作？
+
+旧版客户端可能不识别新版同步协议中的删除墓碑字段。建议所有正在使用的客户端统一升级到兼容版本，避免旧客户端将已删除的待办重新同步回来。
+
+### 10. 如何进一步排查问题？
+
+请先查看项目文档：
+
+- [部署指南](docs/02-部署指南.md)
+- [同步协议](docs/03-同步协议.md)
+- [常见问题文档](docs/04-常见问题.md)
+- [打包与开机自启](docs/06-打包与开机自启.md)
+
+提交 Issue 时，建议附上 Windows 版本、Python 版本、复现步骤和相关错误日志。请先移除 Token、Gist 敏感信息等凭据。
 
 ## 已知限制
 
-- **没有服务器推送**：电脑端靠 30 秒轮询，手机端靠 60 秒定时 + 回到前台/窗口聚焦/网络恢复时触发，所以跨端看到变化有秒级到一分钟级延迟；Gist 没有 webhook 可用。
-- **Gist 私密不等于加密**：私密 Gist 只是不公开列出、不出现在搜索里；知道 Gist 链接的人仍可能查看，GitHub 与你账号下有权者也能读取。不要把密码、密钥、身份证号等敏感信息写进待办。
-- **任务栏空间是动态的**：默认“置顶覆盖 + 任务栏背景截图”，底色与任务栏逐像素一致但不是透明窗口；程序每 5 秒检测开始按钮/任务按钮/托盘的安全区，图标挤过来会自动缩窄并换到新空位，空间完全不够时会暂时隐藏并在托盘提示、腾出空间后自动恢复。全屏应用（B 站/网页视频 F11、全屏游戏）会自动隐藏、退出后恢复（右键可关）；任务栏自动隐藏时不会跟隐；“嵌入任务栏”为实验选项（部分 Windows 11 版本上跨进程子窗口不重绘）；不支持副屏任务栏。
-- **网易云接口非官方**：搜索、歌词、热评接口随时可能变更或限流，失败时只显示歌名，不影响待办、同步和提醒。
-- **媒体后端不是万能的**：没有 `winsdk`/`pywinrt` 时只能读网易云窗口标题，歌词按单调时钟估算推进，暂停或拖动进度条后可能对不上；装了 SMTC 后端才会精确跟随。
-- **仅支持 Windows 11**：任务栏矩形、SMTC、命名互斥量都是 Windows API；手机端需要支持 Service Worker 的现代浏览器（iOS Safari、Android Chrome 均可）。
-- **数据规模**：Gist 单文件读取超过 1MB 会被 GitHub 截断，程序会报「内容被截断」，建议定期「清除已完成」。
-- **资源占用**：PyQt6 桌面端常驻约 **150 MB 工作集**（Qt6 是主要部分，私有内存约 80 MB），空闲 CPU 约 <1%；打包 exe 与源码版基本一致（onedir 目录约 130 MB）。内存特别紧张时可改用更轻的 GUI 方案，但 Qt 本身占大头，压缩空间有限。
-- **混用版本会丢字段/墓碑**：v1.0 不认识 `tombstones`、v1.2.x 不认识 schema v3 的 `due_date/parent_id/estimate_minutes`；新旧桌面端与手机端混用时可能丢字段或删除被复活，升级时请两端一起更新。
-- **AI / 邮件 / 记忆需要自备凭据**：AI 走 OpenAI 兼容 API（按 token 计费，费用由你的账号承担）；Gmail 需要应用专用密码；记忆仓库需要带 `repo` 写权限的 Token。这些凭据以明文保存在本机 `%APPDATA%\Win11TaskbarLyrics\config.json`（与 Gist Token 相同级别），不会提交到仓库。
-- **AI 结果不是保证**：拆解日期/步骤由模型生成，可能不合理；程序会校验日期范围（today..today+horizon），但仍建议你手动调整后再执行。没有 API Key 时不会阻塞待办/记账/记忆的其它功能。
-- **邮件是定时发送而不是实时**：电脑端程序退出时不会发周报；周报/记忆只在程序运行期间按设定时间触发，错过当天则下个周期再发（记忆按天去重）。
-- **提醒在电脑端**：手机端只展示「已到点/已提醒」状态，浏览器页面关闭后不会弹系统通知。
+- **跨端同步不是实时推送。** 桌面端约每 30 秒轮询一次；手机端会定时检查，并在页面回到前台、获得焦点或网络恢复时尝试同步。因此变化可能需要数秒到约一分钟才能显示。
+- **网易云音乐接口为非官方接口。** 接口可能变更或受到限流。歌词或热评获取失败时，这两项功能可能降级，但不会因此关闭待办和提醒功能。
+- **媒体控制能力取决于运行环境。** 如果没有可用的 SMTC 媒体后端，程序会退回读取网易云音乐窗口标题；此时歌词进度可能无法准确跟随暂停或拖动操作。
+- **仅支持 Windows 11 桌面端。** 手机端 PWA 需要支持 Service Worker 的现代浏览器，例如 iOS Safari 或 Android Chrome。
+- **Gist 文件存在大小限制。** 单个文件读取超过约 1 MB 时可能被 GitHub 截断，建议定期清理已完成的待办。
+- **资源占用。** 本机实测桌面端工作集约 150 MB，空闲 CPU 使用率低于 1%；实际表现会因设备和运行环境而异。
+- **旧版客户端不宜与新版混用。** v1.0 不识别新版同步协议中的删除墓碑字段。升级时建议同步更新所有正在使用的客户端，避免删除记录被旧版本覆盖。
+- **手机端不提供持续的系统提醒。** 手机端主要展示待办状态；浏览器页面关闭后，不会由该页面持续弹出系统通知。
+- **v1.3.0 的 AI / 邮件 / 记忆需要自备凭据。** AI 按 token 计费；Gmail 需要应用专用密码；记忆仓库 Token 需要 `repo` 写权限。凭据明文保存在本机 `config.json`，不会提交到仓库；没有配置时不影响待办、记账等基础功能。
+- **周报 / 记忆只在程序运行时触发。** 程序关闭时不会发送；错过的周报等下一个发送日，记忆按天去重。
+
+## 测试与验证
+
+项目提供 Python 核心层单元测试、前端同步协议测试和一键验证脚本。
+
+```bat
+python -m unittest discover -s tests -v
+node tests/test_web_protocol.js
+powershell -ExecutionPolicy Bypass -File tests\run_all.ps1
+```
+
+其中前端协议测试需要 Node.js；一键验证脚本适用于 PowerShell 环境。
+
+**项目维护者于 2026-10-20 记录的验证结果：**
+
+- Python 单元测试：**227 个用例通过**（127 个 core + 100 个 integrations）。
+- 前端同步协议测试：**46 个用例通过**（含 schema v3 与账本协议）。
+- 桌面端语法编译、静态检查和无界面自检通过；打包后的 exe `--selftest` 也验证了懒加载模块完整性。
+- 跨语言同步协议的规范化结果一致（todo v3 / ledger canonical 逐字节相同）。
+- Windows 11 真机验证了歌词更新、热评轮播、待办显示、全屏隐藏、目标日期、账本 Gist 自动创建、每日记忆实际推送、打包运行和开机自启。
+
+以上为维护者记录的测试结果，不代表所有 Windows 设备、Python 版本和网易云接口环境都已验证。
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [架构设计](docs/01-架构设计.md) | 数据流、模块分层、同步与提醒机制、安全边界 |
+| [部署指南](docs/02-部署指南.md) | Token、Pages、Python 环境、端云绑定、升级与重置 |
+| [同步协议](docs/03-同步协议.md) | 数据结构、合并算法、HTTP 缓存与提醒语义 |
+| [常见问题](docs/04-常见问题.md) | 歌词、热评、媒体后端、任务栏显示、同步与限流问题 |
+| [更新日志](docs/05-更新日志.md) | 历史版本变化与升级注意事项 |
+| [打包与开机自启](docs/06-打包与开机自启.md) | EXE 打包、启动方式和排错 |
+| [发布 EXE](docs/07-发布exe到GitHub.md) | GitHub Releases 发布流程 |
+| [待办模块升级设计](docs/08-待办模块升级设计.md) | v1.3.0 数据契约：schema v3、账本 schema 1、AI/邮件/记忆模块接口 |
+| [Logo 提示词](docs/LOGO_PROMPT.md) | 项目图标设计提示词及图标生成方法 |
+
+## 参与贡献
+
+欢迎通过 GitHub Issues 反馈问题，或提交 Pull Request 改进项目。提交前建议先运行相关测试，并说明复现步骤、系统版本和运行环境。
 
 ## 许可证
 
-建议采用 **MIT License**。仓库根目录可自行添加 `LICENSE` 文件（版权人写你自己），本文档不预置许可证正文。若二次分发，请保留 `reference/` 中 v1.0 原始文件的来源说明。
+请以仓库根目录实际提供的 `LICENSE` 文件为准。若尚未添加许可证文件，建议在发布前明确项目许可证；不要仅凭本 README 推断项目已采用某种开源许可证。
+
+---
+
+<p align="center">Made with 🎵 for a more useful Windows taskbar.</p>
