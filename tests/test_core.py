@@ -1515,5 +1515,28 @@ class WeeklyReportTests(unittest.TestCase):
         self.assertIn("还没有记账", joined)
 
 
+class TimelineTests(unittest.TestCase):
+    def test_timeline_groups_sort_and_unscheduled_last(self):
+        doc = core.empty_doc()
+        doc, _ = core.add_todo(doc, "未排期")
+        doc, late = core.add_todo(doc, "晚", due_date="2026-10-22")
+        doc, early = core.add_todo(doc, "早", due_date="2026-10-20", remind_at="09:00")
+        doc, remind = core.add_todo(doc, "提醒", remind_date="2026-10-21", remind_at="08:00")
+        doc, done = core.add_todo(doc, "已完成", due_date="2026-10-19")
+        doc = core.set_done(doc, done["id"], True, "", "")
+        groups = core.timeline_groups(doc)
+        days = [day for day, _items in groups]
+        self.assertEqual(days[0], _dt.date(2026, 10, 20))
+        self.assertEqual(days[1], _dt.date(2026, 10, 21))
+        self.assertEqual(days[2], _dt.date(2026, 10, 22))
+        self.assertIsNone(days[3])
+        self.assertEqual([item["text"] for item in groups[0][1]], ["早"])
+        self.assertEqual(groups[0][1][0]["remind_at"], "09:00")
+        # 已完成的条目不进入时间线
+        self.assertNotIn("已完成", [item["text"] for _day, items in groups for item in items])
+        self.assertEqual(core.timeline_day(remind), _dt.date(2026, 10, 21))
+        self.assertIsNone(core.timeline_day({"text": "x"}))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

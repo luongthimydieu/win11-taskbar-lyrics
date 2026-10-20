@@ -306,6 +306,15 @@
       backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
     }
     .tab { background: transparent; border: 1px solid transparent; color: #94a3b8; font-weight: 500; min-height: 42px; }
+    .tab[data-filter="timeline"] { flex: 0 0 100%; }
+    .timeline-group { margin: 0 0 14px; }
+    .timeline-head {
+      display: flex; justify-content: space-between; align-items: center;
+      margin: 0 2px 8px; padding: 6px 2px; color: #cbd5e1; font-size: 0.84rem; font-weight: 600;
+      border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+    }
+    .timeline-head .timeline-count { color: #64748b; font-weight: 500; font-size: 0.72rem; }
+    .timeline-head.overdue { color: #fda4af; }
     .tab.active {
       background: var(--grad-accent); color: #fff; border-color: transparent;
       box-shadow: 0 8px 20px rgba(99, 102, 241, 0.30);
@@ -355,7 +364,7 @@
       <img class="brand-logo" src="./icon-192.png" alt="任务栏待办 Logo" width="44" height="44" />
       <div class="brand-text">
         <h1>任务栏待办</h1>
-        <p>AI 任务管家 · 跨端同步 · v2.1.0</p>
+        <p>AI 任务管家 · 跨端同步 · v2.2.0</p>
       </div>
     </div>
     <button class="status-pill" id="statusPill" type="button" title="点击展开云同步配置">
@@ -430,6 +439,7 @@
   <!-- 筛选标签 -->
   <nav class="tabs" id="tabs">
     <div class="tab active" data-filter="pending" role="button" tabindex="0">未完成 (<span id="count-pending">0</span>)</div>
+    <div class="tab" data-filter="timeline" role="button" tabindex="0">🗓️ 时间线</div>
     <div class="tab" data-filter="all" role="button" tabindex="0">全部 (<span id="count-all">0</span>)</div>
     <div class="tab" data-filter="done" role="button" tabindex="0">已完成 (<span id="count-done">0</span>)</div>
     <div class="tab" data-filter="ledger" role="button" tabindex="0">💰 账本</div>
@@ -966,6 +976,31 @@
       });
     }
 
+    function timelineDay(todo) {
+      const due = parseDayText(todo && todo.due_date);
+      if (due) return due;
+      return parseDayText(todo && todo.remind_date);
+    }
+    function timelineEntries(todos) {
+      return (todos || [])
+        .filter((todo) => todo && !todo.done)
+        .map((todo) => ({
+          todo: todo,
+          day: timelineDay(todo),
+          time: normalizeRemindAt(todo.remind_at) || '',
+        }))
+        .sort((a, b) => {
+          const da = a.day ? a.day.getTime() : Number.MAX_SAFE_INTEGER;
+          const db = b.day ? b.day.getTime() : Number.MAX_SAFE_INTEGER;
+          if (da !== db) return da - db;
+          if (a.time !== b.time) return a.time < b.time ? -1 : 1;
+          const pa = a.todo.priority === PRIORITY_HIGH ? 0 : 1;
+          const pb = b.todo.priority === PRIORITY_HIGH ? 0 : 1;
+          if (pa !== pb) return pa - pb;
+          return isoRank(a.todo.created_at) - isoRank(b.todo.created_at);
+        });
+    }
+
     // -------------------- 每日节奏（与 core.py 保持一致） --------------------
     function dateOnly(value) {
       const date = value ? new Date(value) : new Date();
@@ -1334,6 +1369,8 @@
       setDone: setDone,
       deleteTodo: deleteTodo,
       pendingTodos: pendingTodos,
+      timelineDay: timelineDay,
+      timelineEntries: timelineEntries,
       reminderDatetime: reminderDatetime,
       dueReminder: dueReminder,
       formatReminder: formatReminder,
@@ -2053,6 +2090,11 @@
       }
 
       let filtered;
+      if (state.filter === 'timeline') {
+        renderTimeline(list, todos, parentIdSet, childStats, todayDay);
+        updateSyncDetail();
+        return;
+      }
       if (state.filter === 'pending') filtered = todos.filter((item) => !item.done);
       else if (state.filter === 'done') filtered = todos.filter((item) => item.done);
       else filtered = todos.slice();
@@ -2154,6 +2196,74 @@
         })
         .join('');
       updateSyncDetail();
+    }
+
+    function timelineLabel(day, todayDay) {
+      if (!day) return '📌 未排期';
+      const diff = Math.round((day.getTime() - todayDay.getTime()) / 86400000);
+      const week = '日一二三四五六'[day.getDay()];
+      const md = pad2(day.getMonth() + 1) + '-' + pad2(day.getDate());
+      if (diff < 0) return '⚠️ 逾期 · ' + md;
+      if (diff === 0) return '📅 今天 · ' + md + ' 周' + week;
+      if (diff === 1) return '📅 明天 · ' + md + ' 周' + week;
+      return '📅 ' + md + ' 周' + week;
+    }
+
+    function renderTimeline(list, todos, parentIdSet, childStats, todayDay) {
+      const entries = protocol.timelineEntries(todos);
+      if (!entries.length) {
+        list.innerHTML = '<div class="empty">还没有按时间排期的待办，给待办设置目标日期或提醒时间即可 ✨</div>';
+        return;
+      }
+      const groups = new Map();
+      entries.forEach((entry) => {
+        const key = entry.day ? entry.day.getTime() : 'unscheduled';
+        const bucket = groups.get(key) || [];
+        bucket.push(entry);
+        groups.set(key, bucket);
+      });
+      const now = new Date();
+      let html = '';
+      groups.forEach((items) => {
+        const day = items[0].day;
+        const overdue = Boolean(day) && day.getTime() < todayDay.getTime();
+        html += '<section class="timeline-group">' +
+          '<div class="timeline-head' + (overdue ? ' overdue' : '') + '">' +
+            '<span>' + escapeHtml(timelineLabel(day, todayDay)) + '</span>' +
+            '<span class="timeline-count">' + items.length + ' 项</span>' +
+          '</div>' +
+          items.map((entry) => {
+            const item = entry.todo;
+            const high = item.priority === protocol.PRIORITY_HIGH;
+            const isSubtask = Boolean(item.parent_id) && parentIdSet.has(item.parent_id);
+            const progress = childStats.get(item.id);
+            const meta = [];
+            meta.push('<span class="badge ' + (high ? 'high' : 'normal') + '">' + (high ? '🔥 紧急' : '时间线') + '</span>');
+            if (progress && progress.total) {
+              meta.push('<span class="badge progress">📁 [' + progress.done + '/' + progress.total + ']</span>');
+            }
+            if (item.remind_at) {
+              const overdueReminder = protocol.dueReminder(item, now);
+              meta.push('<span class="remind' + (overdueReminder ? ' overdue' : '') + '">⏰ ' + escapeHtml(item.remind_at) + '</span>');
+            }
+            if (item.estimate_minutes) {
+              meta.push('<span>⏱ ' + escapeHtml(String(item.estimate_minutes)) + ' 分钟</span>');
+            }
+            return '<article class="todo-item' + (isSubtask ? ' subtask' : '') + (overdue ? ' alerting' : '') + '" data-id="' + escapeHtml(item.id) + '">' +
+              '<button class="checkbox" type="button" data-action="toggle" data-id="' + escapeHtml(item.id) + '" aria-label="切换完成状态"></button>' +
+              '<div class="todo-content">' +
+                '<div class="todo-title">' + escapeHtml(item.text) + '</div>' +
+                '<div class="todo-meta">' + meta.join('') + '</div>' +
+              '</div>' +
+              '<div class="item-actions">' +
+                '<button class="icon-btn" type="button" data-action="edit" data-id="' + escapeHtml(item.id) + '" aria-label="编辑">✏️</button>' +
+                '<button class="icon-btn" type="button" data-action="delete" data-id="' + escapeHtml(item.id) + '" aria-label="删除">✕</button>' +
+              '</div>' +
+            '</article>';
+          }).join('') +
+        '</section>';
+      });
+      list.innerHTML = html;
     }
 
     function renderLedger() {

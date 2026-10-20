@@ -550,9 +550,23 @@ test('Service Worker 缓存清单中的文件都存在', () => {
   assert.deepEqual(missing, []);
 });
 
-test('Service Worker 缓存版本升到 tbl-shell-v9', () => {
+test('Service Worker 缓存版本升到 tbl-shell-v10', () => {
   const swSource = fs.readFileSync(path.join(__dirname, '..', 'github-pages', 'sw.js'), 'utf8');
-  assert.ok(swSource.includes("const CACHE_NAME = 'tbl-shell-v9'"), 'CACHE_NAME 未升级到 tbl-shell-v9');
+  assert.ok(swSource.includes("const CACHE_NAME = 'tbl-shell-v10'"), 'CACHE_NAME 未升级到 tbl-shell-v10');
+});
+
+test('时间线排序：目标日期 > 提醒日期，未排期最后，组内按时间/优先级', () => {
+  const doc = makeDoc([
+    makeTodo('no', '未排期'),
+    makeTodo('late', '晚', T1, { due_date: '2026-10-22' }),
+    makeTodo('early', '早', T1, { due_date: '2026-10-20', remind_at: '09:00' }),
+    makeTodo('remind', '提醒', T1, { remind_date: '2026-10-21', remind_at: '08:00' }),
+    makeTodo('done', '已完成', T1, { due_date: '2026-10-19', done: true, done_at: T2 }),
+  ]);
+  const entries = P.timelineEntries(doc.todos);
+  assert.deepEqual(entries.map((entry) => entry.todo.id), ['early', 'remind', 'late', 'no']);
+  assert.equal(entries[0].time, '09:00');
+  assert.equal(P.timelineDay(entries[3].todo), null);
 });
 
 console.log('\n' + passed + ' 个前端协议用例通过' + (process.exitCode ? '（有失败）' : ''));

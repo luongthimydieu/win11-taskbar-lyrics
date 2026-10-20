@@ -36,6 +36,7 @@ import argparse
 import asyncio
 import ctypes
 from ctypes import wintypes
+from html import escape as html_escape
 import datetime
 import json
 import logging
@@ -108,7 +109,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -2162,6 +2163,87 @@ class AiChatDialog(QDialog):
         return self._task_text or "复杂任务"
 
 
+class TimelineDialog(QDialog):
+    """按日期/时间线罗列所有未完成待办。"""
+
+    def __init__(self, parent: Optional[QWidget], doc: Dict[str, Any]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("🗓️ 待办时间线")
+        self.setModal(True)
+        self.resize(760, 640)
+        self._doc = doc
+        layout = QVBoxLayout(self)
+        self.browser = QTextBrowser()
+        layout.addWidget(self.browser, 1)
+        row = QHBoxLayout()
+        refresh = QPushButton("刷新")
+        close = QPushButton("关闭")
+        row.addStretch(1)
+        row.addWidget(refresh)
+        row.addWidget(close)
+        layout.addLayout(row)
+        refresh.clicked.connect(self.refresh)
+        close.clicked.connect(self.accept)
+        self.refresh()
+
+    @staticmethod
+    def _day_label(day: Optional["datetime.date"], today: "datetime.date") -> str:
+        if day is None:
+            return "📌 未排期"
+        diff = (day - today).days
+        week = "一二三四五六日"[day.weekday()]
+        if diff < 0:
+            return f"⚠️ 逾期 · {day.strftime('%m-%d')}（{-diff} 天）"
+        if diff == 0:
+            return f"📅 今天 · {day.strftime('%m-%d')} 周{week}"
+        if diff == 1:
+            return f"📅 明天 · {day.strftime('%m-%d')} 周{week}"
+        return f"📅 {day.strftime('%m-%d')} 周{week}"
+
+    def refresh(self) -> None:
+        doc = self._doc if isinstance(self._doc, dict) else core.empty_doc()
+        groups = core.timeline_groups(doc)
+        today = core.current_day()
+        pending = sum(len(items) for _day, items in groups)
+        overdue = sum(
+            len(items) for day, items in groups if day is not None and day < today
+        )
+        today_count = sum(len(items) for day, items in groups if day == today)
+        if not pending:
+            self.browser.setHtml(
+                "<h3>🗓️ 待办时间线</h3><p>目前没有未完成待办，全部清空了 🎉</p>"
+            )
+            return
+        parts = [
+            "<h3>🗓️ 待办时间线</h3>",
+            f"<p style='color:#64748b'>共 <b>{pending}</b> 项 · 逾期 <b style='color:#dc2626'>{overdue}</b> · 今天 <b>{today_count}</b></p>",
+        ]
+        for day, items in groups:
+            parts.append(f"<h4 style='margin:14px 0 6px'>{self._day_label(day, today)}（{len(items)}）</h4>")
+            parts.append("<ul style='margin:0 0 8px 18px;padding:0'>")
+            for todo in items:
+                title = html_escape(str(todo.get("text") or ""))
+                bits = []
+                if todo.get("remind_at"):
+                    bits.append(f"⏰ {html_escape(str(todo.get('remind_at')))}")
+                if todo.get("priority") == core.PRIORITY_HIGH:
+                    bits.append("🔥 紧急")
+                progress = core.parent_progress(doc, str(todo.get("id") or ""))
+                if progress[1]:
+                    bits.append(f"📁 [{progress[0]}/{progress[1]}]")
+                if todo.get("estimate_minutes"):
+                    bits.append(f"⏱ {todo.get('estimate_minutes')} 分钟")
+                if todo.get("parent_id"):
+                    bits.append("↳ 子任务")
+                suffix = (
+                    f" <span style='color:#64748b;font-size:12px'>{' · '.join(bits)}</span>"
+                    if bits else ""
+                )
+                parts.append(f"<li style='margin:5px 0'>{title}{suffix}</li>")
+            parts.append("</ul>")
+        self.browser.setHtml("\n".join(parts))
+
+
 class LedgerDialog(QDialog):
     """记一笔 + 本周账本概览。"""
 
@@ -3735,6 +3817,7 @@ class TaskbarWidget(QWidget):
                     lambda _checked=False, pid=info["parent_id"]: self.update_plan_dialog(pid),
                 )
         quick_menu.addAction("➕ 添加待办…", self.add_todo_dialog)
+        quick_menu.addAction("🗓️ 时间线待办…", self.show_timeline)
         quick_menu.addAction("🤖 AI 拆解复杂任务…", self.ai_plan_dialog)
         if self.ai_queue:
             queue_menu = quick_menu.addMenu(f"⏳ AI 排队任务（{len(self.ai_queue)}）")
@@ -4588,6 +4671,10 @@ class TaskbarWidget(QWidget):
         markdown = core.weekly_report_markdown(data, ai_comment)
         return data, markdown, ai_comment
 
+    def show_timeline(self) -> None:
+        dialog = TimelineDialog(self, self.doc)
+        dialog.exec()
+
     def show_weekly_report(self) -> None:
         try:
             _data, markdown, _ai = self.build_weekly_report()
@@ -4835,6 +4922,7 @@ class TaskbarWidget(QWidget):
                     lambda _checked=False, pid=info["parent_id"]: self.update_plan_dialog(pid),
                 )
         tray_quick.addAction("➕ 添加待办…", self.add_todo_dialog)
+        tray_quick.addAction("🗓️ 时间线待办…", self.show_timeline)
         tray_quick.addAction("🤖 AI 拆解复杂任务…", self.ai_plan_dialog)
         tray_quick.addAction("💰 记一笔…", self.ledger_dialog)
         tray_quick.addAction("📊 周报预览…", self.show_weekly_report)

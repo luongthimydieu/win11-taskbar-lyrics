@@ -724,6 +724,41 @@ def parent_progress(doc: Any, parent_id: str) -> Tuple[int, int]:
     return (sum(1 for item in items if item["done"]), len(items))
 
 
+def timeline_day(todo: Any) -> Optional[_dt.date]:
+    """时间线归属日：优先目标完成日期，其次提醒日期；都没有则未排期（None）。"""
+    if not isinstance(todo, dict):
+        return None
+    day = _coerce_day(todo.get("due_date"))
+    if day is None:
+        day = _coerce_day(todo.get("remind_date"))
+    return day
+
+
+def timeline_groups(doc: Any, today: Optional[_dt.date] = None) -> List[Tuple[Optional[_dt.date], List[Dict[str, Any]]]]:
+    """把未完成待办按时间线分组：日期升序，未排期放最后。
+
+    每组内按提醒时间、紧急程度、创建时间排序；``today`` 只用于调用方展示相对日期。
+    """
+    normalized = normalize_doc(doc)
+    buckets: dict = {}
+    for todo in normalized["todos"]:
+        if todo["done"]:
+            continue
+        buckets.setdefault(timeline_day(todo), []).append(todo)
+
+    def item_key(todo: Dict[str, Any]) -> Tuple[str, int, float]:
+        return (
+            todo["remind_at"] or "99:99",
+            0 if todo["priority"] == PRIORITY_HIGH else 1,
+            iso_rank(todo["created_at"]),
+        )
+
+    groups: List[Tuple[Optional[_dt.date], List[Dict[str, Any]]]] = []
+    for day in sorted(buckets, key=lambda value: (value is None, value or _dt.date.max)):
+        groups.append((day, sorted(buckets[day], key=item_key)))
+    return groups
+
+
 def _upcoming_sort_key(item: Dict[str, Any]) -> Tuple[_dt.date, int, float, int, str]:
     todo_id = str(item["id"])
     return (
@@ -2176,6 +2211,8 @@ __all__ = [
     "next_todo_for_day",
     "pending_todos",
     "next_todo",
+    "timeline_day",
+    "timeline_groups",
     "subtasks",
     "parent_progress",
     "upcoming_todos",
