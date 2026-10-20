@@ -1,12 +1,12 @@
 # 07 发布 exe 到 GitHub Release
 
-> ✅ **最新 v1.3.4 已发布（2026-10-20）**
+> ✅ **最新 v1.3.5 已发布（2026-10-20）**
 >
-> - Release 页面：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.3.4>
-> - 直接下载：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/download/v1.3.4/Win11TaskbarLyrics-v1.3.4-onedir.zip>
-> - SHA256：`EF0DB889E5328788B060A96A4BD76B59B75255E675C8D61EE379F8BC02B57041`
+> - Release 页面：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.3.5>
+> - 直接下载：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/download/v1.3.5/Win11TaskbarLyrics-v1.3.5-onedir.zip>
+> - SHA256：`7B327B13786CDFE1C033544D3966F391B49BA3B30B19AC0E1C6C6CAB616A0B0D`
 >
-> 历史版本：v1.3.3、v1.3.2、v1.3.1、v1.3.0 及更早版本仍保留在 Releases 页面。
+> 历史版本：v1.3.4、v1.3.3、v1.3.2、v1.3.1、v1.3.0 及更早版本仍保留在 Releases 页面。
 >
 > 注意：`win11-taskbar-lyrics` 目前是**公开仓库**（Releases 可下载）；如果不想公开，可在 Settings 改回 Private。
 
