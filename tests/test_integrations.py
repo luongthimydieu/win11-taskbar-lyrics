@@ -302,6 +302,24 @@ class PlanComplexTaskTests(unittest.TestCase):
         plan, _ = self._plan(json.dumps(data, ensure_ascii=False))
         self.assertEqual([step["due_date"] for step in plan["steps"]], ["2026-10-20", "2026-11-03"])
 
+    def test_plan_options_in_prompt_and_weekend_adjust(self):
+        # 2026-10-24 是周六：要求只在工作日时，应顺延到 10-26 周一
+        data = {
+            "title": "准备答辩",
+            "steps": [{"text": "整理提纲", "due_date": "2026-10-24", "estimate_minutes": 30}],
+            "note": "",
+        }
+        plan, session = self._plan(
+            json.dumps(data, ensure_ascii=False),
+            horizon_days=14,
+            options={"daily_minutes": 60, "granularity": "concise", "allow_weekends": False},
+        )
+        self.assertEqual(plan["steps"][0]["due_date"], "2026-10-26")
+        system_prompt = session.post.call_args[1]["json"]["messages"][0]["content"]
+        self.assertIn("60 分钟", system_prompt)
+        self.assertIn("3–5 个", system_prompt)
+        self.assertIn("只在周一至周五", system_prompt)
+
     def test_plan_estimate_coercion(self):
         data = json.loads(plan_json())
         data["steps"][0]["estimate_minutes"] = "45"

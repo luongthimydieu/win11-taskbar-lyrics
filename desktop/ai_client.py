@@ -157,6 +157,12 @@ class OpenAICompatibleClient:
 # 复杂任务拆解
 # ---------------------------------------------------------------------------
 
+_GRANULARITY_HINTS = {
+    "concise": "3–5 个",
+    "standard": "5–8 个",
+    "detailed": "8–12 个",
+}
+
 _PLAN_SYSTEM_TEMPLATE = (
     "你是一名中文任务规划助手。请把用户描述的复杂任务拆分成可执行的子任务，"
     "并给出每个子任务的目标完成日期与预计耗时。\n"
@@ -167,7 +173,8 @@ _PLAN_SYSTEM_TEMPLATE = (
     "1. due_date 必须在 {start} 到 {end} 之间（含端点），格式 YYYY-MM-DD；\n"
     "2. estimate_minutes 是 0 到 480 的整数（0 表示未估）；\n"
     "3. steps 至少 1 个，按执行顺序排列；\n"
-    "4. note 可以为空字符串。"
+    "4. note 可以为空字符串；\n"
+    "5. 遵循用户的额外偏好：\n{extra}"
 )
 
 
@@ -282,8 +289,14 @@ def plan_complex_task(
     task_text: str,
     today: Any = None,
     horizon_days: int = 14,
+    options: Any = None,
 ) -> Dict[str, Any]:
     """调用大模型把复杂任务拆成带目标日期的子任务。
+
+    ``options`` 可选：
+    - ``daily_minutes``：每天可投入的分钟数（0/缺省=不限）；
+    - ``granularity``：``concise`` / ``standard`` / ``detailed``；
+    - ``allow_weekends``：是否允许把子任务排在周末（默认 True）。
 
     返回 ``{"title": str, "steps": [{"text", "due_date", "estimate_minutes"}], "note": str}``。
     ``due_date`` 保证落在 ``today .. today + horizon_days`` 之内；模型输出格式错误 /
@@ -306,13 +319,53 @@ def plan_complex_task(
         raise PlanError("horizon_days 不能为负数")
     end = start + _dt.timedelta(days=horizon)
 
-    system = _PLAN_SYSTEM_TEMPLATE.format(start=start.isoformat(), end=end.isoformat())
+    opts = options if isinstance(options, Mapping) else {}
+    try:
+        daily_minutes = max(0, int(opts.get("daily_minutes") or 0))
+    except (TypeError, ValueError):
+        daily_minutes = 0
+    granularity = str(opts.get("granularity") or "standard").strip().lower()
+    if granularity not in _GRANULARITY_HINTS:
+        granularity = "standard"
+    allow_weekends = bool(opts.get("allow_weekends", True))
+    extra_lines = [
+        f"   - 每天可投入时间：{'不限' if daily_minutes <= 0 else str(daily_minutes) + ' 分钟'}",
+        f"   - 拆分粒度：{_GRANULARITY_HINTS[granularity]}子任务",
+        "   - 周末安排："
+        + ("周末也可以安排" if allow_weekends else "只在周一至周五安排（跳过周末）"),
+    ]
+    if not allow_weekends:
+        extra_lines.append("   - 所有 due_date 必须是周一到周五；若原日期落在周末，顺延到下一个工作日")
+
+    system = _PLAN_SYSTEM_TEMPLATE.format(
+        start=start.isoformat(), end=end.isoformat(), extra="\n".join(extra_lines)
+    )
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"今天的日期是 {start.isoformat()}。请规划这个任务：{task}"},
+        {
+            "role": "user",
+            "content": (
+                f"今天的日期是 {start.isoformat()}。请规划这个任务：{task}\n"
+                f"偏好：{extra_lines[0]}；{extra_lines[1]}；{extra_lines[2]}。"
+            ),
+        },
     ]
     raw = client.chat(messages, temperature=0.2, json_mode=True)
-    return _parse_plan(raw, start, end, task)
+    plan = _parse_plan(raw, start, end, task)
+    if not allow_weekends:
+        for step in plan["steps"]:
+            try:
+                day = _dt.date.fromisoformat(step["due_date"])
+            except (KeyError, ValueError):
+                continue
+            while day.weekday() >= 5:
+                day += _dt.timedelta(days=1)
+            if day > end:
+                day = end
+                while day.weekday() >= 5:
+                    day -= _dt.timedelta(days=1)
+            step["due_date"] = day.isoformat()
+    return plan
 
 
 # ---------------------------------------------------------------------------

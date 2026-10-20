@@ -106,7 +106,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.3.4"
+APP_VERSION = "1.3.5"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -1721,6 +1721,30 @@ class AiPlanDialog(QDialog):
         self.horizon_spin.setValue(14)
         self.horizon_spin.setSuffix(" 天内完成")
         form.addRow("时间范围", self.horizon_spin)
+        preset_row = QHBoxLayout()
+        for days, label in ((3, "3 天"), (7, "1 周"), (14, "2 周"), (30, "1 个月")):
+            preset_btn = QPushButton(label)
+            preset_btn.setMinimumHeight(34)
+            preset_btn.clicked.connect(lambda _checked=False, d=days: self.horizon_spin.setValue(d))
+            preset_row.addWidget(preset_btn)
+        form.addRow("快速期限", preset_row)
+        self.daily_combo = QComboBox()
+        for label, minutes in (("不限", 0), ("30 分钟", 30), ("1 小时", 60), ("2 小时", 120), ("3 小时", 180)):
+            self.daily_combo.addItem(label, minutes)
+        form.addRow("每天可投入", self.daily_combo)
+        self.granularity_combo = QComboBox()
+        for label, code in (
+            ("简洁（3–5 步）", "concise"),
+            ("适中（5–8 步）", "standard"),
+            ("详细（8–12 步）", "detailed"),
+        ):
+            self.granularity_combo.addItem(label, code)
+        self.granularity_combo.setCurrentIndex(1)
+        form.addRow("拆分粒度", self.granularity_combo)
+        self.weekend_combo = QComboBox()
+        self.weekend_combo.addItem("只在工作日安排", False)
+        self.weekend_combo.addItem("周末也可以", True)
+        form.addRow("周末安排", self.weekend_combo)
         layout.addLayout(form)
 
         self.preview = QTextBrowser()
@@ -1782,7 +1806,11 @@ class AiPlanDialog(QDialog):
                 timeout=60,
             )
             plan = ai_client.plan_complex_task(
-                client, text, core.current_day(), horizon_days=int(self.horizon_spin.value())
+                client,
+                text,
+                core.current_day(),
+                horizon_days=int(self.horizon_spin.value()),
+                options=self.options(),
             )
             self._plan = plan
             lines = [f"**{plan.get('title') or text}**", ""]
@@ -1812,6 +1840,13 @@ class AiPlanDialog(QDialog):
 
     def horizon_days(self) -> int:
         return int(self.horizon_spin.value())
+
+    def options(self) -> Dict[str, Any]:
+        return {
+            "daily_minutes": int(self.daily_combo.currentData() or 0),
+            "granularity": str(self.granularity_combo.currentData() or "standard"),
+            "allow_weekends": bool(self.weekend_combo.currentData()),
+        }
 
     def is_queued(self) -> bool:
         return self.queued
@@ -3650,7 +3685,9 @@ class TaskbarWidget(QWidget):
                 idle_at=self.ai_calendar.next_idle_start(),
             )
             if dialog.exec() == QDialog.DialogCode.Accepted and dialog.is_queued():
-                self._enqueue_ai_task(dialog.task_text(), dialog.horizon_days())
+                self._enqueue_ai_task(
+                    dialog.task_text(), dialog.horizon_days(), dialog.options()
+                )
             return
         dialog = AiPlanDialog(self, self.config)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -3712,7 +3749,7 @@ class TaskbarWidget(QWidget):
         except OSError as exc:
             LOGGER.warning("保存 AI 排队失败：%s", exc)
 
-    def _enqueue_ai_task(self, text: str, horizon_days: int) -> None:
+    def _enqueue_ai_task(self, text: str, horizon_days: int, options: Any = None) -> None:
         text = str(text or "").strip()
         if not text:
             return
@@ -3720,6 +3757,7 @@ class TaskbarWidget(QWidget):
             "id": f"aiq-{int(time.time() * 1000)}",
             "text": text,
             "horizon_days": int(horizon_days or 14),
+            "options": dict(options or {}),
             "created_at": datetime.datetime.now(ai_schedule.BEIJING_TZ).isoformat(timespec="seconds"),
             "attempts": 0,
         }
@@ -3759,6 +3797,7 @@ class TaskbarWidget(QWidget):
                     str(item.get("text") or ""),
                     core.current_day(),
                     horizon_days=int(item.get("horizon_days") or 14),
+                    options=item.get("options") or {},
                 )
                 self.bridge.ai_queue_result.emit({"ok": True, "id": item.get("id"), "plan": plan})
             except Exception as exc:  # noqa: BLE001
