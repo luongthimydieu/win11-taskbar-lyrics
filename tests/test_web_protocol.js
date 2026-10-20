@@ -303,21 +303,21 @@ test('canonical 输出为键有序 JSON（可与 core.py sort_keys 对齐）', (
   assert.ok(!text.includes(' : ') && !text.includes(', '));
 });
 
-test('canonical 键序包含 v3 字段（due_date/estimate_minutes/parent_id 字母序）', () => {
+test('canonical 键序包含 v4 字段（done_note/done_reflection/due_date 等字母序）', () => {
   const doc = makeDoc([makeTodo('t1', '内容')]);
   const text = P.canonical(doc);
-  assert.ok(text.includes('"done_at":"","due_date":"","estimate_minutes":0,"id":"t1"'));
+  assert.ok(text.includes('"done_at":"","done_note":"","done_reflection":"","due_date":"","estimate_minutes":0,"id":"t1"'));
   assert.ok(text.includes('"notified_at":"","parent_id":"","priority":"normal"'));
   assert.ok(text.indexOf('"parent_id"') < text.indexOf('"priority"'));
   assert.ok(text.indexOf('"due_date"') < text.indexOf('"estimate_minutes"'));
   assert.ok(text.indexOf('"estimate_minutes"') < text.indexOf('"id"'));
 });
 
-test('文档 schema 升到 v3', () => {
-  assert.equal(P.SCHEMA_VERSION, 3);
-  assert.equal(P.emptyDoc().schema, 3);
-  assert.equal(P.normalizeDoc({ schema: 2 }).schema, 3);
-  assert.equal(P.mergeDocs(P.emptyDoc(), P.emptyDoc()).schema, 3);
+test('文档 schema 升到 v4', () => {
+  assert.equal(P.SCHEMA_VERSION, 4);
+  assert.equal(P.emptyDoc().schema, 4);
+  assert.equal(P.normalizeDoc({ schema: 3 }).schema, 4);
+  assert.equal(P.mergeDocs(P.emptyDoc(), P.emptyDoc()).schema, 4);
 });
 
 test('merge 对同一文档幂等', () => {
@@ -550,9 +550,9 @@ test('Service Worker 缓存清单中的文件都存在', () => {
   assert.deepEqual(missing, []);
 });
 
-test('Service Worker 缓存版本升到 tbl-shell-v6', () => {
+test('Service Worker 缓存版本升到 tbl-shell-v7', () => {
   const swSource = fs.readFileSync(path.join(__dirname, '..', 'github-pages', 'sw.js'), 'utf8');
-  assert.ok(swSource.includes("const CACHE_NAME = 'tbl-shell-v6'"), 'CACHE_NAME 未升级到 tbl-shell-v6');
+  assert.ok(swSource.includes("const CACHE_NAME = 'tbl-shell-v7'"), 'CACHE_NAME 未升级到 tbl-shell-v7');
 });
 
 console.log('\n' + passed + ' 个前端协议用例通过' + (process.exitCode ? '（有失败）' : ''));

@@ -749,17 +749,36 @@ WEEK_START = _dt.date(2026, 10, 5)
 
 
 class SchemaV3Tests(unittest.TestCase):
-    def test_schema_version_is_3(self):
-        self.assertEqual(core.SCHEMA_VERSION, 3)
-        self.assertEqual(core.empty_doc()["schema"], 3)
-        # 旧版 schema 2 文档归一化后升级为 3
-        self.assertEqual(core.normalize_doc({"schema": 2})["schema"], 3)
+    def test_schema_version_is_4(self):
+        self.assertEqual(core.SCHEMA_VERSION, 4)
+        self.assertEqual(core.empty_doc()["schema"], 4)
+        # 旧版 schema 2/3 文档归一化后升级为 4
+        self.assertEqual(core.normalize_doc({"schema": 2})["schema"], 4)
+        self.assertEqual(core.normalize_doc({"schema": 3})["schema"], 4)
 
     def test_new_todo_fields_default(self):
         todo = core.normalize_todo({"id": "t1", "text": "任务"})
         self.assertEqual(todo["due_date"], "")
         self.assertEqual(todo["parent_id"], "")
         self.assertEqual(todo["estimate_minutes"], 0)
+        self.assertEqual(todo["done_note"], "")
+        self.assertEqual(todo["done_reflection"], "")
+
+    def test_set_done_records_note_and_reflection(self):
+        doc, todo = core.add_todo(core.empty_doc(), "写报告")
+        doc = core.set_done(doc, todo["id"], True, "写完了初稿", "下次先列大纲")
+        item = doc["todos"][0]
+        self.assertTrue(item["done"])
+        self.assertTrue(item["done_at"])
+        self.assertEqual(item["done_note"], "写完了初稿")
+        self.assertEqual(item["done_reflection"], "下次先列大纲")
+        # 撤销完成后清空完成记录
+        doc = core.set_done(doc, todo["id"], False)
+        item = doc["todos"][0]
+        self.assertFalse(item["done"])
+        self.assertEqual(item["done_at"], "")
+        self.assertEqual(item["done_note"], "")
+        self.assertEqual(item["done_reflection"], "")
 
     def test_legacy_todo_migrates_to_v3(self):
         todo = core.normalize_todo(make_todo("t1", "老数据"))
@@ -839,6 +858,8 @@ class SchemaV3Tests(unittest.TestCase):
             "created_at": todo["created_at"],
             "done": todo["done"],
             "done_at": todo["done_at"],
+            "done_note": todo["done_note"],
+            "done_reflection": todo["done_reflection"],
             "due_date": todo["due_date"],
             "estimate_minutes": todo["estimate_minutes"],
             "id": todo["id"],

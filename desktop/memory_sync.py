@@ -428,7 +428,14 @@ def build_daily_memory(
         f"## 今日完成（{len(completed)}）",
     ]
     if completed:
-        lines.extend(_todo_line(todo, "✅ ") for todo in completed)
+        for todo in completed:
+            lines.append(_todo_line(todo, "✅ "))
+            done_note = _one_line(todo.get("done_note"))
+            done_reflection = _one_line(todo.get("done_reflection"))
+            if done_note:
+                lines.append(f"  - 📝 完成情况：{done_note}")
+            if done_reflection:
+                lines.append(f"  - 💭 心得：{done_reflection}")
     else:
         lines.append("- 今天没有完成记录，明天继续 💪")
     lines.append("")

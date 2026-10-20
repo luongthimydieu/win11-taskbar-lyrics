@@ -40,7 +40,7 @@ LOGGER = logging.getLogger("taskbar.core")
 # 常量
 # ---------------------------------------------------------------------------
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 GIST_FILENAME = "taskbar_todos.json"
 API_BASE = "https://api.github.com"
 
@@ -338,10 +338,10 @@ def _normalize_estimate(text: Any) -> int:
 
 
 def normalize_todo(raw: Any) -> Optional[Dict[str, Any]]:
-    """把任意来源的单条待办归一化为 schema v3 结构；无法修复时返回 None。
+    """把任意来源的单条待办归一化为 schema v4 结构；无法修复时返回 None。
 
     兼容 v1 字段：``remind_time`` / ``createdAt`` / ``updatedAt`` 等；
-    schema v3 新增 ``due_date`` / ``parent_id`` / ``estimate_minutes``（旧数据缺失时补默认值）。
+    schema v4 新增 done_note / done_reflection ``due_date`` / ``parent_id`` / ``estimate_minutes``（旧数据缺失时补默认值）。
     """
     if not isinstance(raw, dict):
         return None
@@ -362,6 +362,10 @@ def normalize_todo(raw: Any) -> Optional[Dict[str, Any]]:
     if done and not done_at:
         done_at = updated
     notified_at = _normalize_iso(raw.get("notified_at"), "") if raw.get("notified_at") else ""
+    done_note = str(raw.get("done_note") or raw.get("doneNote") or "").strip() if done else ""
+    done_reflection = (
+        str(raw.get("done_reflection") or raw.get("doneReflection") or "").strip() if done else ""
+    )
 
     todo_id = str(raw.get("id") or new_id())
     parent_id = str(raw.get("parent_id") or raw.get("parentId") or "").strip()
@@ -383,6 +387,8 @@ def normalize_todo(raw: Any) -> Optional[Dict[str, Any]]:
         "remind_date": _normalize_remind_date(raw.get("remind_date") or raw.get("remindDate")),
         "notified_at": notified_at,
         "done_at": done_at,
+        "done_note": done_note,
+        "done_reflection": done_reflection,
         "due_date": _normalize_date(raw.get("due_date") or raw.get("dueDate")),
         "parent_id": parent_id,
         "estimate_minutes": _normalize_estimate(estimate_raw),
@@ -390,7 +396,7 @@ def normalize_todo(raw: Any) -> Optional[Dict[str, Any]]:
 
 
 def normalize_doc(raw: Any) -> Dict[str, Any]:
-    """把云端 / 本地缓存 / 旧版 JSON 归一化为 schema v3 文档。"""
+    """把云端 / 本地缓存 / 旧版 JSON 归一化为 schema v4 文档。"""
     doc: Dict[str, Any] = {
         "schema": SCHEMA_VERSION,
         "version": 0,
@@ -531,7 +537,7 @@ def add_todo(
     """新增一条待办，返回 (新文档, 新条目)。
 
     ``due_date``（目标完成日期）、``parent_id``（父任务 id）、
-    ``estimate_minutes``（预计耗时分钟）为 schema v3 新增字段，均可不填。
+    ``estimate_minutes``（预计耗时分钟）为 schema v4 新增 done_note / done_reflection字段，均可不填。
     """
     normalized = normalize_doc(doc)
     now = to_iso()
@@ -550,6 +556,8 @@ def add_todo(
         "remind_date": _normalize_remind_date(remind_date),
         "notified_at": "",
         "done_at": "",
+        "done_note": "",
+        "done_reflection": "",
         "due_date": _normalize_date(due_date),
         "parent_id": parent,
         "estimate_minutes": _normalize_estimate(estimate_minutes),
@@ -567,7 +575,7 @@ def update_todo(doc: Any, todo_id: str, **fields: Any) -> Dict[str, Any]:
     normalized = normalize_doc(doc)
     allowed = {
         "text", "priority", "done", "remind_at", "remind_date", "notified_at", "done_at",
-        "due_date", "parent_id", "estimate_minutes",
+        "due_date", "parent_id", "estimate_minutes", "done_note", "done_reflection",
     }
     for item in normalized["todos"]:
         if item["id"] != todo_id:
@@ -587,6 +595,8 @@ def update_todo(doc: Any, todo_id: str, **fields: Any) -> Dict[str, Any]:
                 item["done_at"] = now if value else ""
                 if not value:
                     item["notified_at"] = ""
+                    item["done_note"] = ""
+                    item["done_reflection"] = ""
             elif key in ("remind_at",):
                 item[key] = _normalize_remind_at(value)
             elif key in ("remind_date",):
@@ -598,6 +608,8 @@ def update_todo(doc: Any, todo_id: str, **fields: Any) -> Dict[str, Any]:
                 item[key] = "" if cleaned == item["id"] else cleaned
             elif key == "estimate_minutes":
                 item[key] = _normalize_estimate(value)
+            elif key in ("done_note", "done_reflection"):
+                item[key] = str(value or "").strip()
             elif key in ("notified_at", "done_at"):
                 item[key] = _normalize_iso(value, "") if value else ""
         item["updated_at"] = now
@@ -607,8 +619,19 @@ def update_todo(doc: Any, todo_id: str, **fields: Any) -> Dict[str, Any]:
     return normalized
 
 
-def set_done(doc: Any, todo_id: str, done: bool = True) -> Dict[str, Any]:
-    return update_todo(doc, todo_id, done=done)
+def set_done(
+    doc: Any,
+    todo_id: str,
+    done: bool = True,
+    done_note: str = "",
+    done_reflection: str = "",
+) -> Dict[str, Any]:
+    """标记完成/未完成；完成时可带「完成情况」与「心得」记录。"""
+    fields: Dict[str, Any] = {"done": done}
+    if done:
+        fields["done_note"] = str(done_note or "").strip()
+        fields["done_reflection"] = str(done_reflection or "").strip()
+    return update_todo(doc, todo_id, **fields)
 
 
 def mark_notified(doc: Any, todo_id: str, when: Optional[str] = None) -> Dict[str, Any]:

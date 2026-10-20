@@ -90,6 +90,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QTextBrowser,
+    QTextEdit,
     QTimeEdit,
     QVBoxLayout,
     QWidget,
@@ -97,6 +98,7 @@ from PyQt6.QtWidgets import (
 
 import core
 import ai_schedule
+import task_archive
 
 LOGGER = logging.getLogger("taskbar.widget")
 
@@ -106,7 +108,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.3.5"
+APP_VERSION = "1.3.6"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -114,6 +116,7 @@ STATE_PATH = APP_DIR / "state.json"
 LEDGER_STATE_PATH = APP_DIR / "ledger_state.json"
 AI_QUEUE_PATH = APP_DIR / "ai_queue.json"
 HOLIDAY_CACHE_PATH = APP_DIR / "holidays_cache.json"
+ARCHIVE_PATH = APP_DIR / "archive.json"
 LOG_PATH = APP_DIR / "app.log"
 #: 调试用：每次界面文字变化时把“当前实际要显示的文字”落盘，便于区分“状态没更新”还是“画面没重绘”
 DEBUG_TEXT_PATH = APP_DIR / "last_text.json"
@@ -1688,6 +1691,58 @@ class AddTodoDialog(QDialog):
         }
 
 
+class CompletionDialog(QDialog):
+    """点击完成时记录「完成情况」与「心得」。"""
+
+    def __init__(self, parent: Optional[QWidget], task_text: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("✅ 完成任务")
+        self.setModal(True)
+        self.resize(520, 380)
+        self._skip = False
+        layout = QVBoxLayout(self)
+        title = QLabel(f"「{task_text}」")
+        title.setWordWrap(True)
+        title.setStyleSheet("font-weight:600;font-size:14px;")
+        layout.addWidget(title)
+        hint = QLabel("简单记一下做了什么、有什么心得；留空也可以直接完成。")
+        hint.setStyleSheet("color:#64748b;font-size:12px;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addWidget(QLabel("完成情况（做了什么 / 结果）"))
+        self.note_edit = QTextEdit()
+        self.note_edit.setPlaceholderText("例如：写完了课程设计初稿，实验数据已整理")
+        self.note_edit.setFixedHeight(80)
+        layout.addWidget(self.note_edit)
+        layout.addWidget(QLabel("心得 / 反思"))
+        self.reflection_edit = QTextEdit()
+        self.reflection_edit.setPlaceholderText("例如：下次先列大纲再写正文，效率会更高")
+        self.reflection_edit.setFixedHeight(80)
+        layout.addWidget(self.reflection_edit)
+        buttons = QDialogButtonBox()
+        self.skip_button = QPushButton("直接完成")
+        self.save_button = QPushButton("保存完成")
+        buttons.addButton(self.skip_button, QDialogButtonBox.ButtonRole.ActionRole)
+        buttons.addButton(self.save_button, QDialogButtonBox.ButtonRole.ActionRole)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        layout.addWidget(buttons)
+        self.skip_button.clicked.connect(self._on_skip)
+        self.save_button.clicked.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+    def _on_skip(self) -> None:
+        self._skip = True
+        self.accept()
+
+    def values(self) -> Dict[str, str]:
+        if self._skip:
+            return {"done_note": "", "done_reflection": ""}
+        return {
+            "done_note": self.note_edit.toPlainText().strip(),
+            "done_reflection": self.reflection_edit.toPlainText().strip(),
+        }
+
+
 class AiPlanDialog(QDialog):
     """输入一个复杂任务，调用 AI 拆成多个带日期的小任务。
 
@@ -2029,6 +2084,8 @@ class TaskbarWidget(QWidget):
         self.ledger_store = self._build_ledger_store()
         self._ledger_sync_running = False
         self._ledger_sync_thread: Optional[threading.Thread] = None
+        self.archive = task_archive.load_archive(ARCHIVE_PATH)
+        self._sync_archive_from_doc()
         self._memory_running = False
         self._mail_running = False
         self._memory_retry_at = 0.0
@@ -3137,7 +3194,19 @@ class TaskbarWidget(QWidget):
         todo_id = self._current_alert_id
         if not todo_id:
             return
-        self.doc = core.set_done(self.doc, todo_id, True)
+        item = next((todo for todo in self.doc["todos"] if todo["id"] == todo_id), None)
+        if item is None:
+            self._current_alert_id = None
+            self._activate_next_alert()
+            return
+        dialog = CompletionDialog(self, str(item.get("text") or ""))
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        self.doc = core.set_done(
+            self.doc, todo_id, True, values["done_note"], values["done_reflection"]
+        )
+        self._record_completion(todo_id, values["done_note"], values["done_reflection"])
         self._current_alert_id = None
         self._persist_and_sync()
         self._activate_next_alert()
@@ -3242,6 +3311,7 @@ class TaskbarWidget(QWidget):
         self.last_error = ""
         self._last_notified_error = ""
         save_state(self.doc, self.etag, self.last_sync, self.last_error)
+        self._sync_archive_from_doc()
         self.refresh_texts()
         self.check_reminders()
         self._update_tray_tooltip()
@@ -3554,12 +3624,50 @@ class TaskbarWidget(QWidget):
         self.refresh_texts()
 
     def complete_todo(self, todo_id: str) -> None:
-        self.doc = core.set_done(self.doc, todo_id, True)
+        item = next((todo for todo in self.doc["todos"] if todo["id"] == todo_id), None)
+        if item is None:
+            return
+        dialog = CompletionDialog(self, str(item.get("text") or ""))
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        self.doc = core.set_done(
+            self.doc, todo_id, True, values["done_note"], values["done_reflection"]
+        )
+        self._record_completion(todo_id, values["done_note"], values["done_reflection"])
         if self._current_alert_id == todo_id:
             self._current_alert_id = None
             self._activate_next_alert()
         self._persist_and_sync()
         self.refresh_texts()
+
+    def _sync_archive_from_doc(self) -> None:
+        """把已完成的待办补进归档；手机端完成的也会在这里被记录。"""
+        try:
+            self.archive, added = task_archive.sync_completed_from_doc(self.archive, self.doc)
+            if added:
+                self.archive = task_archive.prune(self.archive)
+                task_archive.save_archive(ARCHIVE_PATH, self.archive)
+                LOGGER.info("完成归档新增 %d 条（来自同步/历史）", added)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("同步完成归档失败：%s", exc)
+
+    def _record_completion(self, todo_id: str, done_note: str = "", done_reflection: str = "") -> None:
+        item = next((todo for todo in self.doc["todos"] if todo["id"] == todo_id), None)
+        if item is None:
+            return
+        try:
+            self.archive, _event = task_archive.add_event(
+                self.archive,
+                item,
+                completed_at=str(item.get("done_at") or ""),
+                done_note=done_note,
+                done_reflection=done_reflection,
+            )
+            self.archive = task_archive.prune(self.archive)
+            task_archive.save_archive(ARCHIVE_PATH, self.archive)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("写入完成归档失败：%s", exc)
 
     # ==================== v1.3 待办 / 记账 / 周报 / 记忆 ====================
     def _build_ledger_store(self) -> Any:
@@ -4082,20 +4190,71 @@ class TaskbarWidget(QWidget):
         moment = datetime.datetime.combine(target_day, datetime.time(23, 59))
         self._memory_running = True
         self._notify("记忆", f"正在生成并推送 {target_day.isoformat()} 的记忆…")
+        self._sync_archive_from_doc()
         config_snapshot = dict(self.config)
         config_snapshot["memory_token"] = token
         doc_snapshot = json.loads(json.dumps(self.doc))
         ledger_snapshot = json.loads(json.dumps(self.ledger_doc))
+        archive_snapshot = json.loads(json.dumps(self.archive))
+        target_iso = target_day.isoformat()
 
         def worker() -> None:
             try:
                 import memory_sync
 
+                # 记忆里的“当天完成”以完成时间为准，并合并归档（被删除的完成项也保留）
+                events = task_archive.events_for_day(archive_snapshot, target_day)
+                memory_doc = json.loads(json.dumps(doc_snapshot))
+                memory_doc["todos"] = [
+                    todo for todo in memory_doc.get("todos", [])
+                    if not (
+                        todo.get("done")
+                        and str(todo.get("done_at") or "")[:10] == target_iso
+                    )
+                ]
+                for event in events:
+                    memory_doc["todos"].append(
+                        {
+                            "id": event.get("todo_id") or event.get("id") or "",
+                            "text": event.get("text") or "",
+                            "priority": event.get("priority") or "normal",
+                            "done": True,
+                            "done_at": event.get("completed_at") or "",
+                            "done_note": event.get("done_note") or "",
+                            "done_reflection": event.get("done_reflection") or "",
+                            "due_date": event.get("due_date") or "",
+                            "parent_id": event.get("parent_id") or "",
+                            "created_at": event.get("created_at") or "",
+                            "updated_at": event.get("completed_at") or "",
+                            "remind_at": "",
+                            "remind_date": "",
+                            "notified_at": "",
+                            "estimate_minutes": 0,
+                        }
+                    )
                 ai_comment = self._ai_evaluate("day", target_day)
                 memory_sync.push_daily_memory(
-                    config_snapshot, doc_snapshot, ledger_snapshot, moment, ai_comment
+                    config_snapshot, memory_doc, ledger_snapshot, moment, ai_comment
                 )
-                self.bridge.memory_finished.emit({"ok": True, "date": target_day.isoformat()})
+                # 机器可读归档：完成 + 未完成/逾期快照
+                if bool(config_snapshot.get("memory_enabled", True)):
+                    try:
+                        payload = task_archive.archive_payload(
+                            archive_snapshot, target_day, doc_snapshot
+                        )
+                        repo = memory_sync.MemoryRepo(
+                            token=token,
+                            repo=str(config_snapshot.get("memory_repo") or ""),
+                            branch=str(config_snapshot.get("memory_branch") or "main"),
+                        )
+                        repo.put_file(
+                            f"archive/{target_iso}.json",
+                            json.dumps(payload, ensure_ascii=False, indent=2),
+                            f"archive {target_iso}",
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        LOGGER.warning("推送记忆归档 JSON 失败：%s", exc)
+                self.bridge.memory_finished.emit({"ok": True, "date": target_iso})
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("推送记忆失败")
                 self.bridge.memory_finished.emit({"ok": False, "error": str(exc)})
@@ -4305,6 +4464,10 @@ class TaskbarWidget(QWidget):
         except Exception:  # noqa: BLE001
             pass
         save_state(self.doc, self.etag, self.last_sync, self.last_error)
+        try:
+            task_archive.save_archive(ARCHIVE_PATH, self.archive)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ---------------------------------------------------------------------------

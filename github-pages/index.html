@@ -519,6 +519,27 @@
     </div>
   </div>
 
+  <!-- 完成记录弹层 -->
+  <div class="modal" id="doneModal">
+    <div class="modal-card">
+      <h2>✅ 完成任务</h2>
+      <p class="hint" id="doneTaskTitle" style="margin:0 0 12px;"></p>
+      <div class="field">
+        <label for="doneNote">完成情况（做了什么 / 结果）</label>
+        <textarea id="doneNote" rows="3" maxlength="500" placeholder="例如：写完了课程设计初稿，实验数据已整理"></textarea>
+      </div>
+      <div class="field">
+        <label for="doneReflection">心得 / 反思</label>
+        <textarea id="doneReflection" rows="3" maxlength="500" placeholder="例如：下次先列大纲再写正文，效率会更高"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="secondary" id="doneCancelBtn">取消</button>
+        <button type="button" class="secondary" id="doneSkipBtn">直接完成</button>
+        <button type="button" id="doneSaveBtn">保存完成</button>
+      </div>
+    </div>
+  </div>
+
   <script>
   /* ========================================================================
    * 同步协议 v3 —— 与 desktop/core.py 完全一致的纯函数实现。
@@ -528,7 +549,7 @@
   (function () {
     'use strict';
 
-    const SCHEMA_VERSION = 3;
+    const SCHEMA_VERSION = 4;
     const GIST_FILENAME = 'taskbar_todos.json';
     const LEDGER_SCHEMA_VERSION = 1;
     const LEDGER_FILENAME = 'taskbar_ledger.json';
@@ -640,6 +661,8 @@
       if (priority !== PRIORITY_HIGH) priority = PRIORITY_NORMAL;
       const done = Boolean(raw.done);
       const doneAt = done ? normalizeIso(raw.done_at || raw.doneAt, updated) : '';
+      const doneNote = done ? String(raw.done_note || raw.doneNote || '').trim() : '';
+      const doneReflection = done ? String(raw.done_reflection || raw.doneReflection || '').trim() : '';
       const notifiedAt = raw.notified_at ? normalizeIso(raw.notified_at, '') : '';
       // 与 core.normalize_todo 完全一致：id 先定，parent_id 支持 parentId 别名并防御自引用
       const todoId = String(raw.id || newId());
@@ -655,6 +678,8 @@
         created_at: created,
         done: done,
         done_at: doneAt,
+        done_note: doneNote,
+        done_reflection: doneReflection,
         due_date: normalizeDueDate(raw.due_date || raw.dueDate),
         estimate_minutes: normalizeEstimateMinutes(estimateRaw),
         id: todoId,
@@ -710,6 +735,8 @@
         created_at: todo.created_at,
         done: todo.done,
         done_at: todo.done_at,
+        done_note: todo.done_note,
+        done_reflection: todo.done_reflection,
         due_date: todo.due_date,
         estimate_minutes: todo.estimate_minutes,
         id: todo.id,
@@ -808,6 +835,8 @@
         estimate_minutes: fields.estimate_minutes,
         notified_at: '',
         done_at: '',
+        done_note: '',
+        done_reflection: '',
       });
       if (!todo) return normalized;
       normalized.todos = normalized.todos.filter((item) => item.id !== todo.id);
@@ -842,8 +871,14 @@
           const done = Boolean(patch.done);
           item.done = done;
           item.done_at = done ? now : '';
-          if (!done) item.notified_at = '';
+          if (!done) {
+            item.notified_at = '';
+            item.done_note = '';
+            item.done_reflection = '';
+          }
         }
+        if (patch.done_note !== undefined) item.done_note = String(patch.done_note || '').trim();
+        if (patch.done_reflection !== undefined) item.done_reflection = String(patch.done_reflection || '').trim();
         if (patch.notified_at !== undefined) {
           item.notified_at = patch.notified_at ? normalizeIso(patch.notified_at, '') : '';
         }
@@ -853,8 +888,13 @@
       normalized.updated_at = now;
       return normalized;
     }
-    function setDone(doc, todoId, done) {
-      return updateTodo(doc, todoId, { done: done !== false });
+    function setDone(doc, todoId, done, notes) {
+      const patch = { done: done !== false };
+      if (done !== false && notes && typeof notes === 'object') {
+        patch.done_note = notes.done_note || '';
+        patch.done_reflection = notes.done_reflection || '';
+      }
+      return updateTodo(doc, todoId, patch);
     }
     function deleteTodo(doc, todoId) {
       const normalized = cloneDoc(doc);
@@ -1362,6 +1402,7 @@
       pendingSync: false,
       syncTimer: null,
       editingId: null,
+      pendingDoneId: null,
       ledger: emptyLedger(),
       ledgerEtag: null,
       ledgerRemote: null,
@@ -1832,7 +1873,35 @@
     function toggleDone(todoId) {
       const item = state.doc.todos.find((todo) => todo.id === todoId);
       if (!item) return;
-      applyDoc(protocol.setDone(state.doc, todoId, !item.done), item.done ? '已恢复为未完成' : '已完成');
+      if (item.done) {
+        applyDoc(protocol.setDone(state.doc, todoId, false), '已恢复为未完成');
+        return;
+      }
+      openDoneModal(item);
+    }
+
+    function openDoneModal(item) {
+      state.pendingDoneId = item.id;
+      $('doneTaskTitle').textContent = item.text;
+      $('doneNote').value = '';
+      $('doneReflection').value = '';
+      $('doneModal').classList.add('active');
+      setTimeout(() => $('doneNote').focus(), 60);
+    }
+
+    function closeDoneModal() {
+      state.pendingDoneId = null;
+      $('doneModal').classList.remove('active');
+    }
+
+    function submitDone(skipNotes) {
+      const todoId = state.pendingDoneId;
+      if (!todoId) return;
+      const notes = skipNotes
+        ? {}
+        : { done_note: $('doneNote').value, done_reflection: $('doneReflection').value };
+      applyDoc(protocol.setDone(state.doc, todoId, true, notes), '已完成');
+      closeDoneModal();
     }
 
     function deleteTodoById(todoId) {
@@ -2063,6 +2132,12 @@
           if (item.done && item.done_at) {
             metaParts.push('<span>✅ ' + escapeHtml(formatDoneAt(item.done_at)) + '</span>');
           }
+          if (item.done_note) {
+            metaParts.push('<span>📝 ' + escapeHtml(item.done_note) + '</span>');
+          }
+          if (item.done_reflection) {
+            metaParts.push('<span>💭 ' + escapeHtml(item.done_reflection) + '</span>');
+          }
           return (
             '<article class="todo-item' + (item.done ? ' done' : '') + (isOverdue && !item.done ? ' alerting' : '') + (isSubtask ? ' subtask' : '') + '" data-id="' + escapeHtml(item.id) + '">' +
               '<button class="checkbox" type="button" data-action="toggle" data-id="' + escapeHtml(item.id) + '" aria-label="切换完成状态">' + (item.done ? '✓' : '') + '</button>' +
@@ -2261,6 +2336,12 @@
       $('editSaveBtn').addEventListener('click', saveEdit);
       $('editModal').addEventListener('click', (event) => {
         if (event.target === $('editModal')) closeEdit();
+      });
+      $('doneCancelBtn').addEventListener('click', closeDoneModal);
+      $('doneSkipBtn').addEventListener('click', () => submitDone(true));
+      $('doneSaveBtn').addEventListener('click', () => submitDone(false));
+      $('doneModal').addEventListener('click', (event) => {
+        if (event.target === $('doneModal')) closeDoneModal();
       });
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) syncAll('回到前台');
