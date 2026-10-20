@@ -416,6 +416,16 @@ test('账本条目归一化与默认值', () => {
   assert.equal(fallback.date, P.currentDayText());
   assert.equal(P.normalizeLedgerEntry({ amount: -8 }).amount, 0);
   assert.equal(P.normalizeLedgerEntry({ amount: 'abc' }).amount, 0);
+  // v1.3.3：账目时间归一化（与 core.normalize_ledger_time 一致）
+  assert.equal(P.normalizeLedgerEntry({ amount: 1, time: '9:05' }).time, '09:05');
+  assert.equal(
+    P.normalizeLedgerEntry({ amount: 1, created_at: '2026-10-17T21:34:00+08:00' }).time,
+    '21:34'
+  );
+  assert.equal(
+    P.normalizeLedgerEntry({ amount: 1, time: '25:99', created_at: '2026-10-17T07:08:00+08:00' }).time,
+    '07:08'
+  );
 });
 
 test('账本日期非法时回落到当天', () => {
@@ -447,6 +457,9 @@ test('账本 canonical 稳定且键有序', () => {
   assert.ok(!P.canonicalLedger(a).includes(' : '));
   // 金额按 Python float 风格输出（100 → 100.0），保证与 core.canonical_ledger 对齐
   assert.ok(P.canonicalLedger(a).includes('"amount":5.0,'));
+  // v1.3.3：time 字段参与 canonical（键序与 Python sort_keys 一致，位于 note 之后）
+  assert.ok(/"time":"\d{2}:\d{2}"/.test(P.canonicalLedger(a)));
+  assert.ok(P.canonicalLedger(a).indexOf('"time"') < P.canonicalLedger(a).indexOf('"type"'));
 });
 
 test('账本 CRUD：新增 / 修改 / 删除生成墓碑', () => {
@@ -537,9 +550,9 @@ test('Service Worker 缓存清单中的文件都存在', () => {
   assert.deepEqual(missing, []);
 });
 
-test('Service Worker 缓存版本升到 tbl-shell-v4', () => {
+test('Service Worker 缓存版本升到 tbl-shell-v5', () => {
   const swSource = fs.readFileSync(path.join(__dirname, '..', 'github-pages', 'sw.js'), 'utf8');
-  assert.ok(swSource.includes("const CACHE_NAME = 'tbl-shell-v4'"), 'CACHE_NAME 未升级到 tbl-shell-v4');
+  assert.ok(swSource.includes("const CACHE_NAME = 'tbl-shell-v5'"), 'CACHE_NAME 未升级到 tbl-shell-v5');
 });
 
 console.log('\n' + passed + ' 个前端协议用例通过' + (process.exitCode ? '（有失败）' : ''));

@@ -301,11 +301,12 @@ def _ledger_entry_line(entry: Any) -> str:
     if not isinstance(entry, Mapping):
         return _as_text(entry)
     day = _as_text(entry.get("date"))[:10]
+    time_text = _as_text(entry.get("time"))[:5]
     kind = "收入" if _as_text(entry.get("type")).lower() == "income" else "支出"
     amount = _money(entry.get("amount"))
     category = _as_text(entry.get("category")) or "未分类"
     note = _as_text(entry.get("note"))
-    prefix = f"{day} " if day else ""
+    prefix = f"{day} {time_text} " if (day and time_text) else (f"{day} " if day else "")
     line = f"{prefix}{kind} · {category} {amount}"
     if note:
         line += f"（{note}）"

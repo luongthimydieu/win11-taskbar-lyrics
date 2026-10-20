@@ -453,7 +453,11 @@ def build_daily_memory(
         for entry in today_entries[:MAX_MEMORY_ITEMS]:
             note = _one_line(entry.get("note"))
             category = _one_line(entry.get("category")) or "未分类"
-            detail = f"- {_entry_kind(entry)} · {category} {_money(entry.get('amount'))}"
+            time_text = _one_line(entry.get("time"))
+            detail = (
+                f"- {time_text + ' ' if time_text else ''}"
+                f"{_entry_kind(entry)} · {category} {_money(entry.get('amount'))}"
+            )
             if note:
                 detail += f"（{note}）"
             lines.append(detail)

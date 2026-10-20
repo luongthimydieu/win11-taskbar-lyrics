@@ -959,6 +959,21 @@ def _normalize_ledger_type(value: Any) -> str:
     return kind if kind in (LEDGER_TYPE_INCOME, LEDGER_TYPE_EXPENSE) else LEDGER_TYPE_EXPENSE
 
 
+_LEDGER_TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+
+
+def normalize_ledger_time(value: Any, created_at: Any = "") -> str:
+    """账目发生时间 ``HH:MM``；缺失时尽量从 created_at 里取 HH:MM。"""
+    text = str(value or "").strip()
+    match = _LEDGER_TIME_RE.match(text)
+    if match:
+        return f"{int(match.group(1)):02d}:{match.group(2)}"
+    created = str(created_at or "")
+    if len(created) >= 16 and _LEDGER_TIME_RE.match(created[11:16]):
+        return created[11:16]
+    return ""
+
+
 def normalize_ledger_entry(raw: Any) -> Optional[Dict[str, Any]]:
     """把单条账目归一化为 schema 1 结构；非 dict 输入返回 None。
 
@@ -975,6 +990,7 @@ def normalize_ledger_entry(raw: Any) -> Optional[Dict[str, Any]]:
     return {
         "id": str(raw.get("id") or new_id("lg")),
         "date": date_text,
+        "time": normalize_ledger_time(raw.get("time"), created),
         "type": _normalize_ledger_type(raw.get("type")),
         "amount": _normalize_amount(raw.get("amount")),
         "category": str(raw.get("category") or "").strip(),
@@ -1106,6 +1122,7 @@ def add_ledger_entry(
     category: str = LEDGER_DEFAULT_CATEGORY,
     note: str = "",
     entry_id: Optional[str] = None,
+    time: Any = "",
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """新增一笔收支，返回 (新账本文档, 新条目)。"""
     normalized = normalize_ledger(doc)
@@ -1113,6 +1130,7 @@ def add_ledger_entry(
     entry: Dict[str, Any] = {
         "id": entry_id or new_id("lg"),
         "date": _normalize_date(date) or current_day().isoformat(),
+        "time": normalize_ledger_time(time, now),
         "type": _normalize_ledger_type(type),
         "amount": _normalize_amount(amount),
         "category": str(category or "").strip() or LEDGER_DEFAULT_CATEGORY,
@@ -1134,9 +1152,9 @@ def add_ledger_entry(
 
 
 def update_ledger_entry(doc: Any, entry_id: str, **fields: Any) -> Dict[str, Any]:
-    """更新一笔账目（白名单字段：date / type / amount / category / note）。"""
+    """更新一笔账目（白名单字段：date / time / type / amount / category / note）。"""
     normalized = normalize_ledger(doc)
-    allowed = {"date", "type", "amount", "category", "note"}
+    allowed = {"date", "time", "type", "amount", "category", "note"}
     now = to_iso()
     for item in normalized["entries"]:
         if item["id"] != entry_id:
@@ -1148,6 +1166,8 @@ def update_ledger_entry(doc: Any, entry_id: str, **fields: Any) -> Dict[str, Any
                 date_text = _normalize_date(value)
                 if date_text:
                     item[key] = date_text
+            elif key == "time":
+                item[key] = normalize_ledger_time(value, item.get("created_at"))
             elif key == "type":
                 item[key] = _normalize_ledger_type(value)
             elif key == "amount":
@@ -1196,7 +1216,7 @@ def ledger_week_summary(doc: Any, week_start: Any = None) -> Dict[str, Any]:
         day = _coerce_day(entry.get("date"))
         if day is not None and start <= day <= end:
             entries.append(entry)
-    entries.sort(key=lambda item: (item["date"], iso_rank(item["created_at"]), item["id"]))
+    entries.sort(key=lambda item: (item["date"], item.get("time") or "", iso_rank(item["created_at"]), item["id"]))
 
     income = 0.0
     expense = 0.0
@@ -1420,8 +1440,9 @@ def weekly_report_markdown(data: Any, ai_comment: str = "") -> str:
         for entry in entries:
             kind = "收入" if entry.get("type") == LEDGER_TYPE_INCOME else "支出"
             detail = (
-                f"- {entry.get('date', '')} {kind} "
-                f"{format_money(entry.get('amount', 0))}"
+                f"- {entry.get('date', '')} "
+                f"{entry.get('time', '') + ' ' if entry.get('time') else ''}"
+                f"{kind} {format_money(entry.get('amount', 0))}"
             )
             category = str(entry.get("category") or "").strip()
             note = str(entry.get("note") or "").strip()

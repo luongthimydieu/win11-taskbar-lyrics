@@ -1075,6 +1075,22 @@ class LedgerNormalizeTests(unittest.TestCase):
         # 与前端 Math.round 一致：0.125 -> 0.13（Python round 会得到 0.12）
         self.assertEqual(core.normalize_ledger_entry({"amount": 0.125})["amount"], 0.13)
 
+    def test_ledger_time_normalization(self):
+        # 9:05 -> 09:05
+        self.assertEqual(
+            core.normalize_ledger_entry({"amount": 1, "time": "9:05"})["time"], "09:05"
+        )
+        # 缺失时间时从 created_at 的 HH:MM 回退
+        entry = core.normalize_ledger_entry(
+            {"amount": 1, "created_at": "2026-10-17T21:34:00+08:00"}
+        )
+        self.assertEqual(entry["time"], "21:34")
+        # 非法时间同样回退到 created_at
+        invalid = core.normalize_ledger_entry(
+            {"amount": 1, "time": "25:99", "created_at": "2026-10-17T07:08:00+08:00"}
+        )
+        self.assertEqual(invalid["time"], "07:08")
+
     def test_canonical_ledger_matches_frontend_json(self):
         ledger = make_ledger(make_entry("e1", note="午饭"))
         entry = ledger["entries"][0]
@@ -1085,6 +1101,7 @@ class LedgerNormalizeTests(unittest.TestCase):
             "date": entry["date"],
             "id": entry["id"],
             "note": entry["note"],
+            "time": entry["time"],
             "type": entry["type"],
             "updated_at": entry["updated_at"],
         }
@@ -1143,6 +1160,14 @@ class LedgerNormalizeTests(unittest.TestCase):
 
 
 class LedgerCrudTests(unittest.TestCase):
+    def test_add_and_update_ledger_time(self):
+        ledger, entry = core.add_ledger_entry(
+            core.empty_ledger(), "2026-10-20", "expense", 12, "餐饮", time="12:34"
+        )
+        self.assertEqual(entry["time"], "12:34")
+        ledger = core.update_ledger_entry(ledger, entry["id"], time="23:05")
+        self.assertEqual(ledger["entries"][0]["time"], "23:05")
+
     def test_add_and_week_summary(self):
         ledger, income = core.add_ledger_entry(
             core.empty_ledger(), "2026-10-06", "income", 100, "工资", "周薪"

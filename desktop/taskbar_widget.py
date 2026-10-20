@@ -53,7 +53,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import requests
-from PyQt6.QtCore import QDate, QObject, QRectF, QTimer, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QDate, QTime, QObject, QRectF, QTimer, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QActionGroup,
@@ -90,6 +90,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QTextBrowser,
+    QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -104,7 +105,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.3.3"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -1859,6 +1860,9 @@ class LedgerDialog(QDialog):
         self.date_edit = QDateEdit()
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDate(QDate.currentDate())
+        self.time_edit = QTimeEdit()
+        self.time_edit.setDisplayFormat("HH:mm")
+        self.time_edit.setTime(QTime.currentTime())
         self.type_combo = QComboBox()
         self.type_combo.addItems(["支出", "收入"])
         self.amount_spin = QDoubleSpinBox()
@@ -1871,6 +1875,7 @@ class LedgerDialog(QDialog):
         self.note_edit = QLineEdit()
         self.note_edit.setPlaceholderText("备注（可选）")
         form.addRow("日期", self.date_edit)
+        form.addRow("时间", self.time_edit)
         form.addRow("类型", self.type_combo)
         form.addRow("金额", self.amount_spin)
         form.addRow("分类", self.category_combo)
@@ -1881,8 +1886,8 @@ class LedgerDialog(QDialog):
         self.summary_label.setStyleSheet("font-weight:600;padding:4px 0;")
         layout.addWidget(self.summary_label)
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["日期", "类型", "金额", "分类", "备注"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["日期", "时间", "类型", "金额", "分类", "备注"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         layout.addWidget(self.table, 1)
@@ -1914,6 +1919,7 @@ class LedgerDialog(QDialog):
         for row, entry in enumerate(entries):
             values = [
                 str(entry.get("date", "")),
+                str(entry.get("time", "")),
                 "收入" if entry.get("type") == "income" else "支出",
                 core.format_money(float(entry.get("amount", 0))),
                 str(entry.get("category", "")),
@@ -1931,6 +1937,7 @@ class LedgerDialog(QDialog):
     def values(self) -> Dict[str, Any]:
         return {
             "date": self.date_edit.date().toString("yyyy-MM-dd"),
+            "time": self.time_edit.time().toString("HH:mm"),
             "type": "income" if self.type_combo.currentIndex() == 1 else "expense",
             "amount": round(float(self.amount_spin.value()), 2),
             "category": self.category_combo.currentText().strip() or "其他",
@@ -3686,6 +3693,7 @@ class TaskbarWidget(QWidget):
                 values["amount"],
                 values["category"],
                 values["note"],
+                time=values["time"],
             )
         except AttributeError:
             QMessageBox.warning(self, "模块未就绪", "账本模块还没准备好，请稍后重试。")

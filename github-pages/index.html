@@ -178,6 +178,65 @@
     .ledger-item.expense .amt { color: var(--danger); }
     .ledger-empty { text-align: center; color: var(--muted); font-size: 0.82rem; padding: 14px 0 4px; }
 
+    /* v1.3.3 移动端体验优化 */
+    header {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 10px;
+      position: relative;
+      margin: -6px -2px 10px; padding: calc(6px + env(safe-area-inset-top)) 4px 8px;
+      background: rgba(15, 23, 42, 0.9); border-radius: 0 0 16px 16px;
+    }
+    .brand h1 { font-size: 1.12rem; }
+    .brand { min-width: 0; }
+    .status-pill { margin-left: auto; }
+    .tabs {
+      display: flex; flex-wrap: wrap;
+      position: sticky; top: 0; z-index: 30; gap: 6px;
+      margin: 0 -2px 10px; padding: 6px 2px;
+      background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    }
+    .tab {
+      min-height: 42px; display: flex; align-items: center; justify-content: center;
+      padding: 6px 4px; font-size: 0.76rem; border-radius: 12px;
+      flex: 0 0 calc(50% - 3px); min-width: 0; white-space: nowrap;
+    }
+    .add-form > button.block { width: 100%; }
+    .add-form .row > select, .add-form .row > input { flex: 1 1 0; min-width: 0; font-size: 15px; }
+    input[type="text"], input[type="password"], input[type="time"], input[type="date"], input[type="number"], select, textarea {
+      min-height: 46px; font-size: 16px; border-radius: 12px;
+    }
+    button { min-height: 44px; border-radius: 12px; }
+    .add-form { gap: 10px; }
+    .card { padding: 14px; border-radius: 18px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+    .chip {
+      background: var(--card-soft); color: var(--muted); border: 1px solid var(--border);
+      border-radius: 999px; padding: 7px 11px; font-size: 0.78rem; font-weight: 500; min-height: 36px;
+    }
+    .chip:active, .chip.active { background: var(--accent-glow); color: var(--accent); border-color: var(--accent); }
+    .ledger-card { padding-bottom: 16px; }
+    .ledger-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 11px; }
+    .ledger-head h2 { font-size: 1rem; }
+    .ledger-head-sub { font-size: 0.72rem; color: var(--muted); }
+    #ledgerAmount { font-size: 1.45rem; font-weight: 700; text-align: center; letter-spacing: 0.5px; }
+    #ledgerAmount::placeholder { font-size: 0.95rem; font-weight: 400; letter-spacing: 0; }
+    #addLedgerBtn { margin-top: 2px; font-size: 0.96rem; }
+    .ledger-summary { gap: 7px; }
+    .summary-box { padding: 10px 6px; border-radius: 14px; }
+    .summary-box b { font-size: 1rem; }
+    .ledger-item { padding: 11px 12px; border-radius: 14px; }
+    .ledger-item .sub { font-size: 0.72rem; }
+    .todo-item { border-radius: 16px; padding: 13px; }
+    .status-pill { min-height: 40px; }
+    .toast { bottom: calc(24px + env(safe-area-inset-bottom)); font-size: 0.86rem; }
+
+    @media (max-width: 380px) {
+      body { padding-left: 10px; padding-right: 10px; }
+      .brand h1 { font-size: 1rem; }
+      .brand p { font-size: 0.68rem; }
+      .tab { font-size: 0.7rem; padding: 5px 6px; }
+      .summary-box b { font-size: 0.88rem; }
+    }
+
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   </style>
 </head>
@@ -241,10 +300,10 @@
           <option value="normal">普通</option>
           <option value="high">🔥 紧急</option>
         </select>
-        <button type="button" id="addBtn">+ 添加</button>
       </div>
       <label class="sr-only" for="todoDue">目标完成日期（可空）</label>
       <input type="date" id="todoDue" aria-label="目标完成日期（可空）" title="目标完成日期：可选，留空表示不指定" />
+      <button type="button" id="addBtn" class="block">+ 添加待办</button>
     </div>
     <p class="hint" style="margin-top:9px;">
       ⏰ 22:00 之后添加的待办会自动算到「明天」，凌晨 2:00 起出现在电脑任务栏；每天 22:00 电脑端也会提醒你填明天的待办。<br />
@@ -270,20 +329,37 @@
   </div>
 
   <!-- 账本（本周收支） -->
-  <section class="card hidden" id="ledgerPanel">
+  <section class="card hidden ledger-card" id="ledgerPanel">
+    <div class="ledger-head">
+      <h2>💰 记账</h2>
+      <span class="ledger-head-sub">精确到分钟</span>
+    </div>
     <div class="add-form ledger-form">
       <div class="row">
         <label class="sr-only" for="ledgerDate">记账日期</label>
         <input type="date" id="ledgerDate" aria-label="记账日期" />
+        <label class="sr-only" for="ledgerTime">记账时间</label>
+        <input type="time" id="ledgerTime" aria-label="记账时间（精确到分钟）" />
+      </div>
+      <div class="row">
+        <label class="sr-only" for="ledgerType">收支类型</label>
         <select id="ledgerType" aria-label="收支类型">
           <option value="expense">支出</option>
           <option value="income">收入</option>
         </select>
-      </div>
-      <div class="row">
         <label class="sr-only" for="ledgerAmount">金额</label>
         <input type="number" id="ledgerAmount" inputmode="decimal" step="0.01" min="0" placeholder="金额（元）" aria-label="金额" />
-        <input type="text" id="ledgerCategory" placeholder="分类（餐饮 / 交通 / 工资…）" maxlength="20" aria-label="分类" />
+      </div>
+      <label class="sr-only" for="ledgerCategory">分类</label>
+      <input type="text" id="ledgerCategory" placeholder="分类（餐饮 / 交通 / 工资…）" maxlength="20" aria-label="分类" />
+      <div class="chips" id="ledgerChips" role="group" aria-label="快速选择分类">
+        <button type="button" class="chip" data-category="餐饮">🍜 餐饮</button>
+        <button type="button" class="chip" data-category="交通">🚇 交通</button>
+        <button type="button" class="chip" data-category="购物">🛍️ 购物</button>
+        <button type="button" class="chip" data-category="学习">📚 学习</button>
+        <button type="button" class="chip" data-category="娱乐">🎮 娱乐</button>
+        <button type="button" class="chip" data-category="工资">💰 工资</button>
+        <button type="button" class="chip" data-category="其他">✨ 其他</button>
       </div>
       <label class="sr-only" for="ledgerNote">备注</label>
       <input type="text" id="ledgerNote" placeholder="备注（可选）" maxlength="80" aria-label="备注" />
@@ -804,6 +880,19 @@
       return Math.round(number * 100) / 100;
     }
 
+    function normalizeLedgerTime(value, createdAt) {
+      const text = String(value || '').trim();
+      const match = text.match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+      if (match) return pad2(Number(match[1])) + ':' + match[2];
+      const created = String(createdAt || '');
+      if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(created)) return created.slice(11, 16);
+      return '';
+    }
+    function nowTimeText() {
+      const moment = new Date();
+      return pad2(moment.getHours()) + ':' + pad2(moment.getMinutes());
+    }
+
     function normalizeLedgerEntry(raw) {
       if (!raw || typeof raw !== 'object') return null;
       const created = normalizeIso(raw.created_at || raw.createdAt, EPOCH_ISO);
@@ -819,6 +908,7 @@
         date: normalizeDate(raw.date) || currentDayText(),
         id: String(raw.id || newId('lg')),
         note: String(raw.note || '').trim(),
+        time: normalizeLedgerTime(raw.time || raw.timeText, created),
         type: typeRaw === LEDGER_INCOME ? LEDGER_INCOME : LEDGER_EXPENSE,
         updated_at: updated,
       };
@@ -882,6 +972,7 @@
         ',"date":' + JSON.stringify(entry.date) +
         ',"id":' + JSON.stringify(entry.id) +
         ',"note":' + JSON.stringify(entry.note) +
+        ',"time":' + JSON.stringify(entry.time) +
         ',"type":' + JSON.stringify(entry.type) +
         ',"updated_at":' + JSON.stringify(entry.updated_at) + '}'
       );
@@ -949,6 +1040,7 @@
       const entry = normalizeLedgerEntry({
         id: input.id || newId('lg'),
         date: input.date,
+        time: input.time,
         type: input.type,
         amount: input.amount,
         category: String(input.category || '').trim() || LEDGER_DEFAULT_CATEGORY,
@@ -974,6 +1066,7 @@
       normalized.entries.forEach((entry) => {
         if (entry.id !== entryId) return;
         if (input.date !== undefined) entry.date = normalizeDate(input.date) || entry.date;
+        if (input.time !== undefined) entry.time = normalizeLedgerTime(input.time, entry.created_at);
         if (input.type !== undefined) {
           entry.type = String(input.type).trim().toLowerCase() === LEDGER_INCOME ? LEDGER_INCOME : LEDGER_EXPENSE;
         }
@@ -1103,6 +1196,7 @@
       todayText: todayText,
       currentDayText: currentDayText,
       normalizeLedgerEntry: normalizeLedgerEntry,
+      normalizeLedgerTime: normalizeLedgerTime,
       normalizeLedger: normalizeLedger,
       emptyLedger: emptyLedger,
       canonicalLedger: canonicalLedger,
@@ -1696,6 +1790,10 @@
     }
 
     /* -------------------- 账本录入 -------------------- */
+    function currentTimeText() {
+      const moment = new Date();
+      return pad2(moment.getHours()) + ':' + pad2(moment.getMinutes());
+    }
     function addLedgerFromForm() {
       const amountInput = $('ledgerAmount');
       const amount = Number(amountInput.value);
@@ -1705,9 +1803,11 @@
         return;
       }
       const dateValue = $('ledgerDate').value || protocol.todayText();
+      const timeValue = $('ledgerTime').value || currentTimeText();
       const category = $('ledgerCategory').value.trim() || protocol.LEDGER_DEFAULT_CATEGORY;
       const next = protocol.addLedgerEntry(state.ledger, {
         date: dateValue,
+        time: timeValue,
         type: $('ledgerType').value,
         amount: amount,
         category: category,
@@ -1715,6 +1815,7 @@
       });
       amountInput.value = '';
       $('ledgerNote').value = '';
+      $('ledgerTime').value = currentTimeText();
       applyLedger(next, '已记一笔');
     }
     function deleteLedgerById(entryId) {
@@ -1883,7 +1984,9 @@
         .map((entry) => {
           const income = entry.type === protocol.LEDGER_INCOME;
           const sign = income ? '+' : '-';
-          const meta = [entry.date];
+          const meta = [];
+          if (entry.date) meta.push(entry.date);
+          if (entry.time) meta.push(entry.time);
           if (entry.note) meta.push(entry.note);
           return (
             '<div class="ledger-item ' + (income ? 'income' : 'expense') + '" data-ledger-id="' + escapeHtml(entry.id) + '">' +
@@ -2003,6 +2106,14 @@
       $('ledgerNote').addEventListener('keydown', (event) => {
         if (event.key === 'Enter') addLedgerFromForm();
       });
+      $('ledgerChips').addEventListener('click', (event) => {
+        const chip = event.target.closest('[data-category]');
+        if (!chip) return;
+        $('ledgerCategory').value = chip.dataset.category || '';
+        document.querySelectorAll('#ledgerChips .chip').forEach((item) => {
+          item.classList.toggle('active', item === chip);
+        });
+      });
       $('ledgerList').addEventListener('click', (event) => {
         const button = event.target.closest('[data-ledger-action]');
         if (!button) return;
@@ -2055,6 +2166,7 @@
       loadState();
       bindEvents();
       $('ledgerDate').value = protocol.todayText();
+      $('ledgerTime').value = currentTimeText();
       renderTodos();
       renderLedger();
       if (isConfigured()) {
