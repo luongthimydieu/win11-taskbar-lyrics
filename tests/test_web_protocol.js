@@ -550,9 +550,9 @@ test('Service Worker 缓存清单中的文件都存在', () => {
   assert.deepEqual(missing, []);
 });
 
-test('Service Worker 缓存版本升到 tbl-shell-v8', () => {
+test('Service Worker 缓存版本升到 tbl-shell-v9', () => {
   const swSource = fs.readFileSync(path.join(__dirname, '..', 'github-pages', 'sw.js'), 'utf8');
-  assert.ok(swSource.includes("const CACHE_NAME = 'tbl-shell-v8'"), 'CACHE_NAME 未升级到 tbl-shell-v8');
+  assert.ok(swSource.includes("const CACHE_NAME = 'tbl-shell-v9'"), 'CACHE_NAME 未升级到 tbl-shell-v9');
 });
 
 console.log('\n' + passed + ' 个前端协议用例通过' + (process.exitCode ? '（有失败）' : ''));

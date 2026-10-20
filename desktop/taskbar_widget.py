@@ -108,7 +108,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -1973,6 +1973,195 @@ class AiPlanDialog(QDialog):
         return self.queued
 
 
+class AiChatDialog(QDialog):
+    """多轮对话式任务规划：先和 AI 聊清楚，再采纳生成的计划。"""
+
+    reply_ready = pyqtSignal(object)
+
+    def __init__(self, parent: Optional[QWidget], config: Dict[str, Any]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("💬 AI 规划对话（多轮）")
+        self.setModal(True)
+        self.resize(800, 700)
+        self._config = dict(config)
+        self._messages: List[Dict[str, str]] = []
+        self._plan: Optional[Dict[str, Any]] = None
+        self._task_text = ""
+        self._sending = False
+
+        layout = QVBoxLayout(self)
+        intro = QLabel(
+            "先用几句话描述你的复杂/长期任务，AI 会追问细节；聊清楚后点「让 AI 出计划」，"
+            "再点「采纳计划」就会加入待办。AI 调用遵循空闲时段规则。"
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#94a3b8;font-size:12px;")
+        layout.addWidget(intro)
+        options = QHBoxLayout()
+        self.horizon_spin = QSpinBox()
+        self.horizon_spin.setRange(3, 120)
+        self.horizon_spin.setValue(30)
+        self.horizon_spin.setSuffix(" 天内完成")
+        options.addWidget(QLabel("期限"))
+        options.addWidget(self.horizon_spin)
+        self.daily_combo = QComboBox()
+        for label, minutes in (("不限", 0), ("30 分钟", 30), ("1 小时", 60), ("2 小时", 120), ("3 小时", 180)):
+            self.daily_combo.addItem(label, minutes)
+        options.addWidget(QLabel("每天可投入"))
+        options.addWidget(self.daily_combo)
+        self.granularity_combo = QComboBox()
+        for label, code in (
+            ("简洁（3–5 步）", "concise"),
+            ("适中（5–8 步）", "standard"),
+            ("详细（8–12 步）", "detailed"),
+        ):
+            self.granularity_combo.addItem(label, code)
+        self.granularity_combo.setCurrentIndex(1)
+        options.addWidget(QLabel("粒度"))
+        options.addWidget(self.granularity_combo)
+        self.weekend_combo = QComboBox()
+        self.weekend_combo.addItem("只在工作日", False)
+        self.weekend_combo.addItem("周末也可以", True)
+        options.addWidget(self.weekend_combo)
+        layout.addLayout(options)
+
+        self.transcript = QTextBrowser()
+        self.transcript.setMarkdown(
+            "**AI 助手**：你好，我是任务规划助手。先告诉我：你想完成什么？大概多久完成？"
+            "每天能投入多少时间？目前进行到哪一步了？"
+        )
+        layout.addWidget(self.transcript, 1)
+
+        row = QHBoxLayout()
+        self.input_edit = QLineEdit()
+        self.input_edit.setPlaceholderText("输入你的任务或回答 AI 的追问…")
+        self.send_btn = QPushButton("发送")
+        row.addWidget(self.input_edit, 1)
+        row.addWidget(self.send_btn)
+        layout.addLayout(row)
+
+        actions = QHBoxLayout()
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color:#64748b;font-size:12px;")
+        self.plan_btn = QPushButton("让 AI 出计划")
+        self.accept_btn = QPushButton("采纳计划")
+        self.accept_btn.setEnabled(False)
+        cancel = QPushButton("取消")
+        actions.addWidget(self.status_label, 1)
+        actions.addWidget(self.plan_btn)
+        actions.addWidget(self.accept_btn)
+        actions.addWidget(cancel)
+        layout.addLayout(actions)
+
+        self.send_btn.clicked.connect(self.send_message)
+        self.input_edit.returnPressed.connect(self.send_message)
+        self.plan_btn.clicked.connect(self.ask_for_plan)
+        self.accept_btn.clicked.connect(self._accept_plan)
+        cancel.clicked.connect(self.reject)
+        self.reply_ready.connect(self._on_reply)
+
+    def _options(self) -> Dict[str, Any]:
+        return {
+            "daily_minutes": int(self.daily_combo.currentData() or 0),
+            "granularity": str(self.granularity_combo.currentData() or "standard"),
+            "allow_weekends": bool(self.weekend_combo.currentData()),
+        }
+
+    def _system_prompt(self) -> str:
+        start = core.current_day()
+        end = start + datetime.timedelta(days=int(self.horizon_spin.value()))
+        opts = self._options()
+        return (
+            "你是一名中文任务规划助手，需要和用户多轮对话来规划复杂/长期任务。\n"
+            f"今天是 {start.isoformat()}，计划最晚到 {end.isoformat()}。\n"
+            "先通过提问了解目标、截止时间、每天可投入时间、已有进度、优先级；每次最多问 2 个问题。\n"
+            "当信息足够，或用户要求出计划时，用自然语言给一段简短安排摘要，并**在最后输出一个 JSON 代码块**：\n"
+            "```json\n"
+            '{"title":"任务标题","steps":[{"text":"步骤","due_date":"YYYY-MM-DD","estimate_minutes":30}],"note":"提醒"}\n'
+            "```\n"
+            f"约束：due_date 在 {start.isoformat()} 到 {end.isoformat()} 之间；"
+            f"每天可投入 {opts['daily_minutes'] or '不限'} 分钟；粒度 {opts['granularity']}（简洁3–5/适中5–8/详细8–12步）；"
+            f"{'周末可以安排' if opts['allow_weekends'] else '只在周一至周五安排'}。"
+        )
+
+    def _start_request(self, extra_user: str = "") -> None:
+        if self._sending:
+            return
+        text = extra_user or self.input_edit.text().strip()
+        if not text:
+            return
+        if not extra_user:
+            self.input_edit.clear()
+        if not self._task_text:
+            self._task_text = text
+        self._messages.append({"role": "user", "content": text})
+        self.transcript.append("\n**你**：" + text)
+        self._sending = True
+        self.send_btn.setEnabled(False)
+        self.plan_btn.setEnabled(False)
+        self.status_label.setText("AI 正在思考…")
+        messages = [{"role": "system", "content": self._system_prompt()}] + list(self._messages)
+
+        def worker() -> None:
+            try:
+                import ai_client
+
+                client = ai_client.OpenAICompatibleClient(
+                    base_url=self._config.get("ai_base_url") or "https://api.deepseek.com",
+                    api_key=str(self._config.get("ai_api_key") or ""),
+                    model=str(self._config.get("ai_model") or "deepseek-flash"),
+                    timeout=60,
+                )
+                reply = client.chat(messages, temperature=0.4)
+                self.reply_ready.emit({"ok": True, "reply": reply})
+            except Exception as exc:  # noqa: BLE001
+                self.reply_ready.emit({"ok": False, "error": str(exc)})
+
+        threading.Thread(target=worker, daemon=True, name="AiChat").start()
+
+    def send_message(self) -> None:
+        self._start_request()
+
+    def ask_for_plan(self) -> None:
+        self._start_request("请根据上面的对话，给出最终计划，并在最后输出 JSON。")
+
+    def _on_reply(self, result: Dict[str, Any]) -> None:
+        self._sending = False
+        self.send_btn.setEnabled(True)
+        self.plan_btn.setEnabled(True)
+        if not result.get("ok"):
+            self.transcript.append("\n**AI 助手**：调用失败：" + str(result.get("error") or "未知错误"))
+            self.status_label.setText("调用失败，可重试")
+            return
+        reply = str(result.get("reply") or "").strip()
+        self._messages.append({"role": "assistant", "content": reply})
+        self.transcript.append("\n**AI 助手**：" + reply)
+        self.status_label.setText("")
+        try:
+            import ai_client
+
+            start = core.current_day()
+            end = start + datetime.timedelta(days=int(self.horizon_spin.value()))
+            plan = ai_client._parse_plan(reply, start, end, self._task_text or "复杂任务")
+            self._plan = plan
+            self.status_label.setText("✅ 已识别计划，可点「采纳计划」")
+            self.accept_btn.setEnabled(True)
+        except Exception:
+            return
+
+    def _accept_plan(self) -> None:
+        if not self._plan:
+            QMessageBox.information(self, "还没有计划", "请先点「让 AI 出计划」。")
+            return
+        self.accept()
+
+    def plan(self) -> Optional[Dict[str, Any]]:
+        return self._plan
+
+    def task_text(self) -> str:
+        return self._task_text or "复杂任务"
+
+
 class LedgerDialog(QDialog):
     """记一笔 + 本周账本概览。"""
 
@@ -3535,6 +3724,7 @@ class TaskbarWidget(QWidget):
             menu.addSeparator()
 
         quick_menu = menu.addMenu("➕ 待办 / 记账 / 周报 / 记忆")
+        quick_menu.addAction("💬 AI 规划对话（多轮）…", self.ai_chat_dialog)
         quick_menu.addAction("📅 长期任务规划（AI 排期）…", self.long_term_plan_dialog)
         parents = self._plan_parents()
         if parents:
@@ -3893,6 +4083,34 @@ class TaskbarWidget(QWidget):
     def long_term_plan_dialog(self) -> None:
         """「长期任务」按钮：默认 1 个月、详细粒度、工作日安排的 AI 排期。"""
         self.ai_plan_dialog(default_horizon=30, default_granularity="detailed")
+
+    def ai_chat_dialog(self) -> None:
+        """多轮对话式规划：和 AI 聊清楚需求后再采纳计划。"""
+        if not str(self.config.get("ai_api_key", "")).strip():
+            answer = QMessageBox.question(
+                self, "AI 未配置", "多轮规划需要 AI API Key，是否现在打开设置？"
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.open_advanced_settings()
+            return
+        if not self._ai_idle_ok():
+            answer = QMessageBox.question(
+                self,
+                "当前是高峰时段",
+                "AI 规划对话需要实时调用，只在空闲时段可用。\n是否改用「长期任务规划」排队，等空闲后自动生成？",
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.long_term_plan_dialog()
+            return
+        dialog = AiChatDialog(self, self.config)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        plan = dialog.plan() or {}
+        if not (plan.get("steps") or []):
+            QMessageBox.warning(self, "没有计划", "对话里还没有生成可用的计划。")
+            return
+        count = self._apply_ai_plan(plan, default_title=dialog.task_text())
+        self._notify("AI 规划完成", f"已按对话结果拆成 {count} 个子任务并加入待办")
 
     def _plan_parents(self) -> List[Dict[str, Any]]:
         """列出带子任务的未完成父任务，供「更新规划」选择。"""
@@ -4606,6 +4824,7 @@ class TaskbarWidget(QWidget):
         tray_menu = QMenu(self)
         tray_menu.addAction("显示 / 隐藏", self.toggle_visibility)
         tray_quick = tray_menu.addMenu("➕ 待办 / 记账 / 周报")
+        tray_quick.addAction("💬 AI 规划对话（多轮）…", self.ai_chat_dialog)
         tray_quick.addAction("📅 长期任务规划（AI 排期）…", self.long_term_plan_dialog)
         parents = self._plan_parents()
         if parents:
