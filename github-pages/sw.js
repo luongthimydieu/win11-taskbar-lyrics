@@ -1,7 +1,7 @@
 /* Win11 任务栏待办同步台 - Service Worker
  * 只缓存应用外壳（网络优先 + 离线回退），GitHub API 等跨域请求永不缓存。
  */
-const CACHE_NAME = 'tbl-shell-v3';
+const CACHE_NAME = 'tbl-shell-v4';
 const SHELL_ASSETS = [
   './',
   './index.html',

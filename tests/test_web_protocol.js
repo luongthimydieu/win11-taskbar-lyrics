@@ -48,7 +48,7 @@ function makeTodo(id, text, updated, extra) {
 }
 function makeDoc(todos, tombstones, version) {
   return P.normalizeDoc({
-    schema: 2,
+    schema: 3,
     version: version || 1,
     updated_at: T1,
     todos: todos || [],
@@ -84,6 +84,54 @@ test('非法时间/日期被丢弃', () => {
   const todo = P.normalizeTodo({ text: 'x', remind_at: '25:99', remind_date: '2026-13-40' });
   assert.equal(todo.remind_at, '');
   assert.equal(todo.remind_date, '');
+});
+
+test('协议 v3：due_date / parent_id / estimate_minutes 归一化', () => {
+  const todo = P.normalizeTodo({
+    id: 'v3',
+    text: '带目标日期的任务',
+    due_date: '2026-10-25',
+    parent_id: 'td-parent',
+    estimate_minutes: '45',
+  });
+  assert.equal(todo.due_date, '2026-10-25');
+  assert.equal(todo.parent_id, 'td-parent');
+  assert.equal(todo.estimate_minutes, 45);
+});
+
+test('due_date 缺失或非法时回落到空串', () => {
+  assert.equal(P.normalizeTodo({ text: 'x' }).due_date, '');
+  assert.equal(P.normalizeTodo({ text: 'x', due_date: '' }).due_date, '');
+  assert.equal(P.normalizeTodo({ text: 'x', due_date: '2026-13-01' }).due_date, '');
+  assert.equal(P.normalizeTodo({ text: 'x', due_date: '2026-02-30' }).due_date, '');
+  assert.equal(P.normalizeTodo({ text: 'x', due_date: '明天' }).due_date, '');
+});
+
+test('estimate_minutes 默认 0 且为非负整数', () => {
+  assert.equal(P.normalizeTodo({ text: 'x' }).estimate_minutes, 0);
+  assert.equal(P.normalizeTodo({ text: 'x', estimate_minutes: -5 }).estimate_minutes, 0);
+  assert.equal(P.normalizeTodo({ text: 'x', estimate_minutes: 'abc' }).estimate_minutes, 0);
+  assert.equal(P.normalizeTodo({ text: 'x', estimate_minutes: 12.9 }).estimate_minutes, 12);
+  assert.equal(P.normalizeTodo({ text: 'x', estimate_minutes: '007' }).estimate_minutes, 7);
+});
+
+test('parent_id 统一为字符串（默认空串）', () => {
+  assert.equal(P.normalizeTodo({ text: 'x' }).parent_id, '');
+  assert.equal(P.normalizeTodo({ text: 'x', parent_id: '' }).parent_id, '');
+  assert.equal(P.normalizeTodo({ text: 'x', parent_id: 123 }).parent_id, '123');
+  assert.equal(P.normalizeTodo({ text: 'x', parent_id: '  td-abc  ' }).parent_id, 'td-abc');
+});
+
+test('parent_id 兼容 parentId 别名并防御自引用', () => {
+  assert.equal(P.normalizeTodo({ id: 'td-1', text: 'x', parentId: 'td-p' }).parent_id, 'td-p');
+  assert.equal(P.normalizeTodo({ id: 'td-1', text: 'x', parent_id: 'td-1' }).parent_id, '');
+});
+
+test('estimate_minutes 兼容 estimateMinutes 别名', () => {
+  assert.equal(P.normalizeTodo({ id: 'e1', text: 'x', estimateMinutes: 25 }).estimate_minutes, 25);
+  // 与 Python 一致：estimate_minutes 为 None 时才看别名
+  assert.equal(P.normalizeTodo({ id: 'e2', text: 'x', estimate_minutes: null, estimateMinutes: 25 }).estimate_minutes, 25);
+  assert.equal(P.normalizeTodo({ id: 'e3', text: 'x', estimate_minutes: 0, estimateMinutes: 25 }).estimate_minutes, 0);
 });
 
 test('空文本丢弃、重复 id 去重', () => {
@@ -157,6 +205,40 @@ test('删除操作产生墓碑', () => {
   assert.equal(after.tombstones[0].id, doc.todos[0].id);
 });
 
+test('addTodo 写入 due_date / parent_id / estimate_minutes', () => {
+  let doc = P.addTodo(P.emptyDoc(), { text: '父任务' });
+  const parentId = doc.todos[0].id;
+  doc = P.addTodo(doc, { text: '子任务', parent_id: parentId, due_date: isoDate(3), estimate_minutes: 30 });
+  const child = doc.todos.find((item) => item.text === '子任务');
+  assert.equal(child.parent_id, parentId);
+  assert.equal(child.due_date, isoDate(3));
+  assert.equal(child.estimate_minutes, 30);
+});
+
+test('updateTodo 可修改/清空 due_date 与 estimate_minutes', () => {
+  let doc = P.addTodo(P.emptyDoc(), { text: '任务', due_date: isoDate(2), estimate_minutes: 20 });
+  const id = doc.todos[0].id;
+  doc = P.updateTodo(doc, id, { due_date: isoDate(5), estimate_minutes: 40 });
+  assert.equal(doc.todos[0].due_date, isoDate(5));
+  assert.equal(doc.todos[0].estimate_minutes, 40);
+  doc = P.updateTodo(doc, id, { due_date: '', estimate_minutes: -1 });
+  assert.equal(doc.todos[0].due_date, '');
+  assert.equal(doc.todos[0].estimate_minutes, 0);
+  // 与 core.update_todo 一致：parent_id 指向自己时清空
+  doc = P.updateTodo(doc, id, { parent_id: id });
+  assert.equal(doc.todos[0].parent_id, '');
+});
+
+test('v3 字段参与合并（按 updated_at 取新）', () => {
+  const merged = P.mergeDocs(
+    makeDoc([makeTodo('t1', '任务', T1, { due_date: '2026-10-20', estimate_minutes: 10 })]),
+    makeDoc([makeTodo('t1', '任务', T2, { due_date: '2026-10-25', parent_id: 'td-p', estimate_minutes: 30 })])
+  );
+  assert.equal(merged.todos[0].due_date, '2026-10-25');
+  assert.equal(merged.todos[0].parent_id, 'td-p');
+  assert.equal(merged.todos[0].estimate_minutes, 30);
+});
+
 console.log('\n[3] 提醒与排序');
 
 function isoDate(offsetDays) {
@@ -221,6 +303,23 @@ test('canonical 输出为键有序 JSON（可与 core.py sort_keys 对齐）', (
   assert.ok(!text.includes(' : ') && !text.includes(', '));
 });
 
+test('canonical 键序包含 v3 字段（due_date/estimate_minutes/parent_id 字母序）', () => {
+  const doc = makeDoc([makeTodo('t1', '内容')]);
+  const text = P.canonical(doc);
+  assert.ok(text.includes('"done_at":"","due_date":"","estimate_minutes":0,"id":"t1"'));
+  assert.ok(text.includes('"notified_at":"","parent_id":"","priority":"normal"'));
+  assert.ok(text.indexOf('"parent_id"') < text.indexOf('"priority"'));
+  assert.ok(text.indexOf('"due_date"') < text.indexOf('"estimate_minutes"'));
+  assert.ok(text.indexOf('"estimate_minutes"') < text.indexOf('"id"'));
+});
+
+test('文档 schema 升到 v3', () => {
+  assert.equal(P.SCHEMA_VERSION, 3);
+  assert.equal(P.emptyDoc().schema, 3);
+  assert.equal(P.normalizeDoc({ schema: 2 }).schema, 3);
+  assert.equal(P.mergeDocs(P.emptyDoc(), P.emptyDoc()).schema, 3);
+});
+
 test('merge 对同一文档幂等', () => {
   const doc = makeDoc([makeTodo('t1', 'a'), makeTodo('t2', 'b')]);
   assert.equal(canon(P.mergeDocs(doc, doc)), canon(doc));
@@ -259,6 +358,31 @@ test('todoDay 按创建时间归属', () => {
   assert.equal(P.todoDay(evening).getDate(), 18);
 });
 
+test('todoDay 优先使用 due_date（与 core.todo_day 一致）', () => {
+  const todo = P.normalizeTodo({
+    id: 'd1',
+    text: '有目标日期',
+    created_at: '2026-10-17T10:00:00+08:00',
+    due_date: '2026-10-25',
+  });
+  const base = localDate(2026, 10, 20, 12, 0);
+  assert.equal(P.dayText(P.todoDay(todo), base), '10-25');
+  const noDue = P.normalizeTodo({ id: 'd2', text: '无目标日期', created_at: '2026-10-17T10:00:00+08:00' });
+  assert.equal(P.dayText(P.todoDay(noDue), base), '10-17');
+});
+
+test('formatDueDate：今天 / 明天 / MM-DD / 逾期', () => {
+  const base = new Date(2026, 9, 20, 12, 0, 0); // 2026-10-20
+  const withDue = (due, done) =>
+    P.normalizeTodo({ id: 'x', text: 'x', due_date: due, done: Boolean(done) });
+  assert.equal(P.formatDueDate(withDue('2026-10-20'), base), '今天');
+  assert.equal(P.formatDueDate(withDue('2026-10-21'), base), '明天');
+  assert.equal(P.formatDueDate(withDue('2026-10-25'), base), '10-25');
+  assert.equal(P.formatDueDate(withDue('2026-10-19'), base), '逾期');
+  assert.equal(P.formatDueDate(withDue('2026-10-19', true), base), '10-19');
+  assert.equal(P.formatDueDate(P.normalizeTodo({ id: 'y', text: 'y' }), base), '');
+});
+
 test('fillReminderNeeded 22 点后明天没人填时提醒', () => {
   const empty = P.emptyDoc();
   assert.equal(P.fillReminderNeeded(empty, localDate(2026, 10, 17, 22, 5)), true);
@@ -269,7 +393,131 @@ test('fillReminderNeeded 22 点后明天没人填时提醒', () => {
   assert.equal(P.fillReminderNeeded(filled, localDate(2026, 10, 17, 22, 5)), false);
 });
 
-console.log('\n[6] 部署资源与 DOM 引用静态检查');
+console.log('\n[6] 账本协议（独立 Gist taskbar_ledger.json）');
+
+test('账本条目归一化与默认值', () => {
+  const entry = P.normalizeLedgerEntry({
+    id: 'lg-1',
+    date: '2026-10-20',
+    type: 'income',
+    amount: '12.5',
+    category: ' 工资 ',
+    note: '  月薪  ',
+  });
+  assert.equal(entry.type, 'income');
+  assert.equal(entry.amount, 12.5);
+  assert.equal(entry.category, '工资');
+  assert.equal(entry.note, '月薪');
+  const fallback = P.normalizeLedgerEntry({});
+  assert.equal(fallback.type, 'expense');
+  assert.equal(fallback.amount, 0);
+  // 与 core.normalize_ledger_entry 一致：分类缺失保留空串（新增账目时再兜底「其他」）
+  assert.equal(fallback.category, '');
+  assert.equal(fallback.date, P.currentDayText());
+  assert.equal(P.normalizeLedgerEntry({ amount: -8 }).amount, 0);
+  assert.equal(P.normalizeLedgerEntry({ amount: 'abc' }).amount, 0);
+});
+
+test('账本日期非法时回落到当天', () => {
+  const entry = P.normalizeLedgerEntry({ id: 'lg-d', date: '2026-02-30', amount: 3, category: '交通' });
+  assert.equal(entry.date, P.currentDayText());
+  const noDate = P.normalizeLedgerEntry({ id: 'lg-n', amount: 3 });
+  assert.equal(noDate.date, P.currentDayText());
+});
+
+test('账本 canonical 稳定且键有序', () => {
+  const raw = {
+    entries: [{
+      id: 'lg-b',
+      date: '2026-10-20',
+      type: 'expense',
+      amount: 5,
+      category: '餐饮',
+      note: '',
+      created_at: T1,
+      updated_at: T1,
+    }],
+    tombstones: [],
+  };
+  const a = P.normalizeLedger(Object.assign({ version: 1, updated_at: T1 }, raw));
+  const b = P.normalizeLedger(Object.assign({ version: 9, updated_at: T2 }, raw));
+  assert.equal(P.canonicalLedger(a), P.canonicalLedger(b));
+  assert.equal(P.canonicalLedger(P.emptyLedger()), '{"entries":[],"tombstones":[]}');
+  assert.ok(P.canonicalLedger(a).startsWith('{"entries":[{"amount":'));
+  assert.ok(!P.canonicalLedger(a).includes(' : '));
+  // 金额按 Python float 风格输出（100 → 100.0），保证与 core.canonical_ledger 对齐
+  assert.ok(P.canonicalLedger(a).includes('"amount":5.0,'));
+});
+
+test('账本 CRUD：新增 / 修改 / 删除生成墓碑', () => {
+  let ledger = P.addLedgerEntry(P.emptyLedger(), {
+    date: '2026-10-20', type: 'expense', amount: 25.5, category: '餐饮', note: '午饭',
+  });
+  assert.equal(ledger.entries.length, 1);
+  assert.equal(ledger.version, 1);
+  const id = ledger.entries[0].id;
+  ledger = P.updateLedgerEntry(ledger, id, { amount: 30, note: '晚饭' });
+  assert.equal(ledger.entries[0].amount, 30);
+  assert.equal(ledger.entries[0].note, '晚饭');
+  ledger = P.deleteLedgerEntry(ledger, id);
+  assert.equal(ledger.entries.length, 0);
+  assert.equal(ledger.tombstones.length, 1);
+  assert.equal(ledger.tombstones[0].id, id);
+});
+
+test('addLedgerEntry 分类为空时兜底为「其他」', () => {
+  const ledger = P.addLedgerEntry(P.emptyLedger(), {
+    date: '2026-10-20', type: 'expense', amount: 9, category: '  ',
+  });
+  assert.equal(ledger.entries[0].category, P.LEDGER_DEFAULT_CATEGORY);
+});
+
+test('ledgerWeekSummary：本周收入 / 支出 / 结余与分类', () => {
+  let ledger = P.emptyLedger();
+  ledger = P.addLedgerEntry(ledger, { date: '2026-10-20', type: 'income', amount: 100, category: '工资' });
+  ledger = P.addLedgerEntry(ledger, { date: '2026-10-21', type: 'expense', amount: 30.5, category: '餐饮' });
+  ledger = P.addLedgerEntry(ledger, { date: '2026-10-18', type: 'expense', amount: 9, category: '上周' });
+  const summary = P.ledgerWeekSummary(ledger, '2026-10-19');
+  assert.equal(summary.income, 100);
+  assert.equal(summary.expense, 30.5);
+  assert.equal(summary.net, 69.5);
+  assert.equal(summary.entries.length, 2);
+  assert.deepEqual(summary.entries.map((entry) => entry.date), ['2026-10-20', '2026-10-21']);
+  assert.equal(summary.by_category['餐饮'].expense, 30.5);
+  assert.equal(summary.by_category['工资'].income, 100);
+});
+
+test('mergeLedgers：较新条目胜出、墓碑删除生效', () => {
+  const base = {
+    entries: [{
+      id: 'lg-a', date: '2026-10-20', type: 'expense', amount: 5, category: '零食', note: '',
+    }],
+    tombstones: [],
+  };
+  const older = P.normalizeLedger(Object.assign({ version: 1, updated_at: T1 }, JSON.parse(JSON.stringify(base))));
+  older.entries[0].created_at = T1;
+  older.entries[0].updated_at = T1;
+  const newer = P.normalizeLedger(Object.assign({ version: 2, updated_at: T2 }, JSON.parse(JSON.stringify(base))));
+  newer.entries[0].updated_at = T2;
+  const merged = P.mergeLedgers(older, newer);
+  assert.equal(merged.entries.length, 1);
+  assert.equal(merged.entries[0].updated_at, T2);
+  const withTomb = P.normalizeLedger({
+    version: 3,
+    updated_at: T3,
+    entries: [],
+    tombstones: [{ id: 'lg-a', deleted_at: T3 }],
+  });
+  assert.equal(P.mergeLedgers(merged, withTomb).entries.length, 0);
+});
+
+test('formatMoney 输出 ¥ 前缀两位小数', () => {
+  assert.equal(P.formatMoney(12.5), '¥12.50');
+  assert.equal(P.formatMoney(0), '¥0.00');
+  assert.equal(P.formatMoney(1234.5), '¥1234.50');
+});
+
+console.log('\n[7] 部署资源与 DOM 引用静态检查');
 
 test('所有 $("id") 引用的元素都存在于 HTML', () => {
   const htmlIds = new Set([...html.matchAll(/id="([^"]+)"/g)].map((match) => match[1]));
@@ -287,6 +535,11 @@ test('Service Worker 缓存清单中的文件都存在', () => {
   assert.ok(assets.length >= 4, '未提取到足够的缓存资源');
   const missing = assets.filter((name) => !fs.existsSync(path.join(__dirname, '..', 'github-pages', name)));
   assert.deepEqual(missing, []);
+});
+
+test('Service Worker 缓存版本升到 tbl-shell-v4', () => {
+  const swSource = fs.readFileSync(path.join(__dirname, '..', 'github-pages', 'sw.js'), 'utf8');
+  assert.ok(swSource.includes("const CACHE_NAME = 'tbl-shell-v4'"), 'CACHE_NAME 未升级到 tbl-shell-v4');
 });
 
 console.log('\n' + passed + ' 个前端协议用例通过' + (process.exitCode ? '（有失败）' : ''));

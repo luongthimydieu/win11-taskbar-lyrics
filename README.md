@@ -1,14 +1,14 @@
-# Win11 任务栏歌词 + 网易云高赞热评 + 手机端跨端待办（v1.2.9）
+# Win11 任务栏歌词 + 网易云高赞热评 + 手机端跨端待办（v1.3.0）
 
 <img src="desktop/logo.png" alt="项目 Logo" width="96" align="right" />
 
 > Logo：磨砂玻璃音乐清单 · 已用于 exe 图标、托盘/窗口图标与手机 PWA 图标。
 >
-> 📦 Windows 免安装版下载：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.2.9>
+> 📦 Windows 免安装版下载：<https://github.com/luongthimydieu/win11-taskbar-lyrics/releases/tag/v1.3.0>
 
 把 Windows 11 任务栏的空白处变成一条“长在任务栏上”的信息条：主行跟着网易云音乐滚动逐行歌词，副行轮播**精选的有意思热评**与**下一项待办**；到点提醒时整条变红并呼吸闪烁，左键一点就完成并回写云端。手机端是一个可添加到主屏幕的静态 PWA，在外面随手记一条待办，电脑端 30 秒内就能看到。
 
-v1.2.1 起桌面端默认使用「置顶覆盖 + 任务栏背景截图」把文字贴合在任务栏左侧空位（不遮图标、整块可点击），并把 `SetParent` 嵌入保留为实验选项；v1.2.2 加入每日待办节奏（22:00 提醒填明天、凌晨 2:00 自动翻篇）。
+v1.2.1 起桌面端默认使用「置顶覆盖 + 任务栏背景截图」把文字贴合在任务栏左侧空位（不遮图标、整块可点击），并把 `SetParent` 嵌入保留为实验选项；v1.2.2 加入每日待办节奏（22:00 提醒填明天、凌晨 2:00 自动翻篇）；v1.3.0 加入目标完成日期、AI 复杂任务拆解、每日记账、每周 Gmail 周报与每日记忆推送。
 
 整个项目**不需要自建服务器、不需要域名、不需要数据库**：手机端跑在 GitHub Pages 上，数据放在你自己账号的一个私密 GitHub Gist 里，Windows 端用 PyQt6 读取并轮询。
 
@@ -22,13 +22,18 @@ v1.2.1 起桌面端默认使用「置顶覆盖 + 任务栏背景截图」把文�
 | 歌词跟手 | SMTC 0.5 秒轮询 + 本地单调时间轴（SMTC 位置恒为 0 也能正常推进）；右键「🎶 歌词同步微调」可按 0.2/0.5 秒修正播放器/LRC 偏差（正数=歌词更早） |
 | 有意思的热评 | 从 hotComments 里过滤水评/广告/纯表情，优先挑“有故事/有情绪”的短评，轮播更慢、每首只留约 10 条 |
 | 只显示下一项待办 | 按你在手机端上传的顺序稳定显示“下一项”，完成一条自动顺延；不再在待办之间随机轮播 |
+| 目标完成日期 | 每条待办可指定未来某天完成；到期标签显示「今天/明天/MM-DD/逾期」，未来任务不会提前占用今天 |
+| AI 拆解复杂任务 | 右键「🤖 AI 拆解复杂任务」，调用 OpenAI 兼容 API（默认 DeepSeek）拆成带日期、带耗时的子任务，自动建立父子关系并显示 `[done/total]` 进度 |
+| 每日记账 | 右键「💰 记一笔」记录收入/支出（分类、备注），账本独立私密 Gist；本周收入/支出/结余一目了然 |
+| 每周周报邮件 | Gmail SMTP 自动发送（默认周日 21:00）：完成/未完成/逾期/子任务/改进建议/账单汇总与明细 + AI 评价 |
+| 每日记忆推送 | 每天 23:30 把当日完成情况、账单和 AI 评价推到私有仓库 `taskbar-memory`（`memories/YYYY-MM-DD.md` + `index.json`） |
 | 每日待办节奏 | **22:00 之后添加的待办自动算“明天”**；**凌晨 2:00 自动翻篇**到新的一天（0:00–1:59 仍算前一天）；**每天 22:00 电脑托盘提醒**你填写明天的待办（右键可关），手机端 22:00 后也会显示“明天的待办还没填”的提示 |
 | 全屏自动隐藏 | 看 B 站/网页视频按 F11、或运行全屏游戏时，自动隐藏任务栏组件，退出全屏 1 秒内恢复；可在右键菜单「🖥️ 全屏应用时自动隐藏」关闭 |
 | 不丢数据的同步 | schema v2：条目级 `updated_at` + 删除墓碑 `tombstones` + `version`，两端同一套 `mergeDocs`，写前先合并 |
 | 省额度的轮询 | 每 30 秒带 `If-None-Match` 请求，304 不计入 GitHub 限流额度 |
 | 可靠的到点提醒 | `remind_date` + 目标时刻 + 24 小时补提醒窗口 + 云端 `notified_at` 去重 + 稍后提醒 10 分钟 |
 | 双媒体后端 | 自动识别 `winsdk`（Python ≤3.11）或 `winrt-Windows.Media.Control`（Python 3.12+），都没有时退回窗口标题 |
-| 可测试 | `core.py` 不依赖 Qt，67 个 Python 单测 + 24 个前端协议用例；`tests/run_all.ps1` 可一键全跑 |
+| 可测试 | `core.py` 不依赖 Qt，**227 个 Python 单测 + 46 个前端协议用例**；`tests/run_all.ps1` 可一键全跑 |
 | 工程化细节 | 单实例互斥量、系统托盘、滚动日志、原子写配置、每 5 秒检测任务栏几何变化 |
 | 可诊断 | 右键菜单「🩺 任务栏诊断」或 `--diagnose`，直接给出 Windows 版本、任务栏句柄、当前嵌入状态与子窗口结构 |
 
@@ -47,10 +52,13 @@ v1.2.1 起桌面端默认使用「置顶覆盖 + 任务栏背景截图」把文�
 ```text
 win11-taskbar-lyrics/
 ├── README.md
-├── docs/                  # 专题文档 01–06（连本 README 共 7 篇）
+├── docs/                  # 专题文档 01–08（连本 README 共 9 篇）
 ├── desktop/               # Windows 任务栏端（Python + PyQt6）
-│   ├── core.py            # 无 Qt 依赖的核心层，可单元测试
-│   ├── taskbar_widget.py  # UI / SMTC / 任务栏吸附 / 提醒
+│   ├── core.py            # 无 Qt 依赖的核心层，可单元测试（schema v3 + 账本协议）
+│   ├── taskbar_widget.py  # UI / SMTC / 任务栏吸附 / 提醒 / 记账 / 周报 / 记忆
+│   ├── ai_client.py       # OpenAI 兼容 API：复杂任务拆解、每日/每周评价
+│   ├── reporting.py       # 周报邮件（Gmail SMTP）
+│   ├── memory_sync.py     # 每日记忆推送 GitHub 仓库
 │   ├── requirements.txt
 │   ├── install_deps.bat / run.bat
 │   ├── build_exe.ps1 / install_autostart.ps1
@@ -58,7 +66,7 @@ win11-taskbar-lyrics/
 │   ├── index.html / manifest.webmanifest / sw.js
 │   ├── icon-192.png / icon-512.png / apple-touch-icon.png
 │   ├── .nojekyll / README.md
-├── tests/                 # test_core.py（Python 单测）+ test_web_protocol.js（Node 协议测试）+ run_all.ps1（一键验证）
+├── tests/                 # test_core.py / test_integrations.py（Python）+ test_web_protocol.js（Node）+ run_all.ps1
 ├── tools/make_icons.py    # 生成 PWA 图标
 └── reference/             # v1.0 原始文件存档（仅供对照）
 ```
@@ -128,6 +136,16 @@ python taskbar_widget.py --selftest
 
 Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\config.json`，手机端在浏览器 `localStorage`，都不会写进 Git 仓库。
 
+### 第 4 步：AI / 周报 / 记忆 / 账本（v1.3.0，可选）
+
+1. 右键任务栏胶囊 →「⚙️ AI / 邮件 / 记忆设置」；
+2. **AI**：填 OpenAI 兼容 API 的 Base URL（默认 `https://api.deepseek.com`）、模型（默认 `deepseek-chat`）和 API Key，点「测试 AI」；
+3. **周报邮件**：Gmail 发件邮箱 + **应用专用密码**（在 Google 账号 → 安全性 → 两步验证 → 应用专用密码 生成），设置发送星期/时间，点「发送测试邮件」；
+4. **记忆仓库**：仓库默认 `luongthimydieu/taskbar-memory`，填一个带 `repo` 写权限的 Token，点「测试记忆仓库」；每天 23:30 自动推送；
+5. **账本**：点「创建账本 Gist」生成独立账本（也用于手机端账本同步），之后右键「💰 记一笔」即可；手机端的账本 Gist ID 可在 PWA 配置里填同一个。
+
+> AI / Gmail / 记忆 Token 都只保存在本机 `config.json`，不会提交到仓库。没有配置 AI 时，待办、记账、记忆仍可正常用，只是不会自动拆解/评价。
+
 ## 常用命令
 
 以下命令默认在项目根目录执行；标注 **CMD** 的用命令提示符/`.bat`，标注 **PowerShell** 的用 PowerShell。找不到 `python` 时先打开 Anaconda Prompt 并激活环境。
@@ -154,7 +172,7 @@ Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\conf
 | 查看日志尾部 | `Get-Content "$env:APPDATA\Win11TaskbarLyrics\app.log" -Tail 50 -Wait` | PowerShell |
 | 彻底重置本地 | `Remove-Item -Recurse -Force "$env:APPDATA\Win11TaskbarLyrics"` | PowerShell |
 
-> `node tests/test_web_protocol.js` 会逐条打印用例结果（当前 20 个全部通过）；只要有失败，进程退出码就是 1，可直接作为 CI 门禁。`tests/run_all.ps1` 会把它和 Python 单测、语法检查、无界面烟测一起跑。
+> `node tests/test_web_protocol.js` 会逐条打印用例结果（当前 46 个全部通过）；只要有失败，进程退出码就是 1，可直接作为 CI 门禁。`tests/run_all.ps1` 会把它和 Python 单测、语法检查、无界面烟测一起跑。
 >
 > 重置前请先退出程序；删除 `%APPDATA%\Win11TaskbarLyrics` 只会清掉本机配置、缓存与日志，**不会删除云端 Gist 里的待办**。
 
@@ -164,9 +182,14 @@ Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\conf
 | --- | --- | --- |
 | 桌面端语法编译 | `python -m py_compile desktop/core.py desktop/taskbar_widget.py` | 通过 |
 | 静态检查 | `python -m pyflakes desktop/core.py desktop/taskbar_widget.py tests/test_core.py tools/make_icons.py` | 0 告警 |
-| 核心层单元测试 | `python -m unittest discover -s tests -v` | 63 个用例通过（含“每日待办节奏”边界用例） |
-| 前端同步协议测试 | `node tests/test_web_protocol.js` | 24 个用例通过（含 DOM 引用、SW 资源静态检查与每日节奏用例） |
-| 跨语言协议一致性 | 同一份文档分别交给 `core.canonical` 与 `P.canonical` | 3 份文档指纹逐字节一致 |
+| 核心层单元测试 | `python -m unittest discover -s tests -v` | 227 个用例通过（127 core + 100 integrations） |
+| 前端同步协议测试 | `node tests/test_web_protocol.js` | 46 个用例通过（含 DOM 引用、SW v4 资源静态检查、schema v3 与账本协议） |
+| 跨语言协议一致性 | 同一份文档分别交给 `core.canonical` 与 `P.canonical` | todo / ledger 指纹逐字节一致（v3） |
+| 目标日期 / 子任务（真机） | 添加带 due_date 的待办 + AI 拆解 | 任务栏显示「📅 明天」与父任务 `[done/total]` 进度 |
+| 记账 / 账本同步（真机） | 首次启动自动创建账本 Gist | `ledger_gist_id` 写入配置，账本独立同步到 `taskbar_ledger.json` |
+| 每日记忆（真机） | `memory_sync.push_daily_memory(...)` | 写入 `taskbar-memory/memories/2026-10-20.md` + `index.json`（已实际推送） |
+| 周报邮件（离线） | 真实数据调用 `weekly_report_data → build_weekly_email` | 生成 566 字 Markdown、1996 字节 HTML，未真实发送（待填 Gmail 应用密码） |
+| AI 规划（mock） | `tests/test_integrations.py` | JSON 解析、日期越界、请求失败等 100 个用例通过 |
 | 热评筛选（真实接口） | `core.NetEaseClient.fetch_song_bundle(...)` | 38 行歌词 + 10 条精选评论，水评/广告被过滤 |
 | 任务栏显示（真机） | 启动后截图 + `last_text.json` | 置顶覆盖模式，窗口 17–577、白色文字显示在任务栏左侧空位、不遮图标 |
 | 实时刷新（真机） | 间隔 8 秒两次截图 | 歌词从 `And all the clubs…` 变为 `You think you broke my heart…`，副行在“精选热评”与“📋 下一项待办”之间切换 |
@@ -191,10 +214,11 @@ Token 只在两端本地保存：电脑端在 `%APPDATA%\Win11TaskbarLyrics\conf
 | [02 部署指南](docs/02-部署指南.md) | 从零创建 Token、部署 Pages、两条 Python 路线、绑定、自启、升级与重置 |
 | [03 同步协议](docs/03-同步协议.md) | JSON schema、合并算法、canonical、ETag/HTTP、错误码、收敛举例、提醒语义 |
 | [04 常见问题](docs/04-常见问题.md) | 歌词/热评、媒体后端、任务栏吸附、同步报错、Token 吊销、限流等 |
-| [05 更新日志](docs/05-更新日志.md) | v1.2.3 / v1.2.2 / v1.2.1 / v1.2.0 / v1.1.0 变更对照与升级注意事项 |
+| [05 更新日志](docs/05-更新日志.md) | v1.3.0 待办/记账/周报/记忆、v1.2.x 系列变更与升级注意事项 |
 | [06 打包与开机自启](docs/06-打包与开机自启.md) | `build_exe.ps1`、`install_autostart.ps1`、启动文件夹原理、打包排错 |
-| [Logo 提示词](docs/LOGO_PROMPT.md) | 给 GPT / DALL·E 的项目图标、横幅提示词，以及 ICO / PWA 图标生成步骤 |
 | [07 发布 exe](docs/07-发布exe到GitHub.md) | 把打包好的 zip 发到 GitHub Releases 的三种方法与发布前验证 |
+| [08 待办模块升级设计](docs/08-待办模块升级设计.md) | v1.3.0 数据契约：schema v3、账本 schema 1、AI/邮件/记忆模块接口 |
+| [Logo 提示词](docs/LOGO_PROMPT.md) | 给 GPT / DALL·E 的项目图标、横幅提示词，以及 ICO / PWA 图标生成步骤 |
 
 v1.0 的原始文件保存在 `reference/`（`original_taskbar_widget.py`、`original_index.html`），只用于对照，不参与运行。
 
@@ -208,7 +232,10 @@ v1.0 的原始文件保存在 `reference/`（`original_taskbar_widget.py`、`ori
 - **仅支持 Windows 11**：任务栏矩形、SMTC、命名互斥量都是 Windows API；手机端需要支持 Service Worker 的现代浏览器（iOS Safari、Android Chrome 均可）。
 - **数据规模**：Gist 单文件读取超过 1MB 会被 GitHub 截断，程序会报「内容被截断」，建议定期「清除已完成」。
 - **资源占用**：PyQt6 桌面端常驻约 **150 MB 工作集**（Qt6 是主要部分，私有内存约 80 MB），空闲 CPU 约 <1%；打包 exe 与源码版基本一致（onedir 目录约 130 MB）。内存特别紧张时可改用更轻的 GUI 方案，但 Qt 本身占大头，压缩空间有限。
-- **混用版本会丢墓碑**：v1.0 不认识 `tombstones`，v1.0 与 v1.1 客户端同时写同一个 Gist 时，删除记录可能被覆盖；升级时请两端一起更新。
+- **混用版本会丢字段/墓碑**：v1.0 不认识 `tombstones`、v1.2.x 不认识 schema v3 的 `due_date/parent_id/estimate_minutes`；新旧桌面端与手机端混用时可能丢字段或删除被复活，升级时请两端一起更新。
+- **AI / 邮件 / 记忆需要自备凭据**：AI 走 OpenAI 兼容 API（按 token 计费，费用由你的账号承担）；Gmail 需要应用专用密码；记忆仓库需要带 `repo` 写权限的 Token。这些凭据以明文保存在本机 `%APPDATA%\Win11TaskbarLyrics\config.json`（与 Gist Token 相同级别），不会提交到仓库。
+- **AI 结果不是保证**：拆解日期/步骤由模型生成，可能不合理；程序会校验日期范围（today..today+horizon），但仍建议你手动调整后再执行。没有 API Key 时不会阻塞待办/记账/记忆的其它功能。
+- **邮件是定时发送而不是实时**：电脑端程序退出时不会发周报；周报/记忆只在程序运行期间按设定时间触发，错过当天则下个周期再发（记忆按天去重）。
 - **提醒在电脑端**：手机端只展示「已到点/已提醒」状态，浏览器页面关闭后不会弹系统通知。
 
 ## 许可证

@@ -36,6 +36,7 @@ import argparse
 import asyncio
 import ctypes
 from ctypes import wintypes
+import datetime
 import json
 import logging
 import math
@@ -52,7 +53,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import requests
-from PyQt6.QtCore import QObject, QRectF, QTimer, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QDate, QObject, QRectF, QTimer, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QActionGroup,
@@ -68,16 +69,27 @@ from PyQt6.QtGui import (
     QPixmap,
 )
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
+    QCheckBox,
+    QComboBox,
+    QDateEdit,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QSystemTrayIcon,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -92,11 +104,12 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.2.9"
+APP_VERSION = "1.3.0"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
 STATE_PATH = APP_DIR / "state.json"
+LEDGER_STATE_PATH = APP_DIR / "ledger_state.json"
 LOG_PATH = APP_DIR / "app.log"
 #: 调试用：每次界面文字变化时把“当前实际要显示的文字”落盘，便于区分“状态没更新”还是“画面没重绘”
 DEBUG_TEXT_PATH = APP_DIR / "last_text.json"
@@ -114,6 +127,27 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "gist_id": "",
     "github_direct": True,     # api.github.com 直连（绕过系统代理），避免代理抖动导致同步失败
     "lyric_offset_ms": 0,      # 歌词同步微调（正数=歌词更早；用于修正播放器/SMTC 的 0.x 秒延迟）
+    # ==== v1.3.0 待办/记账/周报/记忆 ====
+    "ai_enabled": True,
+    "ai_base_url": "https://api.deepseek.com",
+    "ai_api_key": "",
+    "ai_model": "deepseek-chat",
+    "mail_host": "smtp.gmail.com",
+    "mail_port": 465,
+    "mail_user": "",
+    "mail_password": "",
+    "mail_to": "",
+    "ledger_gist_id": "",
+    "memory_enabled": True,
+    "memory_repo": "luongthimydieu/taskbar-memory",
+    "memory_token": "",
+    "memory_branch": "main",
+    "memory_time": "23:30",
+    "weekly_report_enabled": True,
+    "weekly_report_weekday": 7,   # ISO：7=周日
+    "weekly_report_time": "21:00",
+    "last_memory_date": "",
+    "last_report_week": "",
     "offset_ratio": 0.0,       # 0=自动；拖拽后保存为相对任务栏宽度的比例
     "auto_anchor": True,       # True=自动贴到托盘区左侧的空位
     "width": DEFAULT_WIDTH,
@@ -288,6 +322,59 @@ def save_state(doc: Dict[str, Any], etag: Optional[str], last_sync: str, last_er
         )
     except OSError as exc:
         LOGGER.warning("保存本地状态失败：%s", exc)
+
+
+def _empty_ledger() -> Dict[str, Any]:
+    factory = getattr(core, "empty_ledger", None)
+    if factory is not None:
+        try:
+            return factory()
+        except Exception:  # noqa: BLE001
+            pass
+    return {"schema": 1, "version": 0, "updated_at": "", "entries": [], "tombstones": []}
+
+
+def load_ledger_state() -> Dict[str, Any]:
+    payload: Any = None
+    try:
+        if LEDGER_STATE_PATH.exists():
+            payload = json.loads(LEDGER_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        LOGGER.warning("读取本地账本失败：%s", exc)
+    normalize = getattr(core, "normalize_ledger", None)
+    doc = payload.get("doc") if isinstance(payload, dict) else None
+    if normalize is not None:
+        try:
+            doc = normalize(doc)
+        except Exception:  # noqa: BLE001
+            doc = _empty_ledger()
+    elif not isinstance(doc, dict):
+        doc = _empty_ledger()
+    etag = payload.get("etag") if isinstance(payload, dict) else None
+    return {"doc": doc, "etag": etag}
+
+
+def save_ledger_state(doc: Dict[str, Any], etag: Optional[str]) -> None:
+    try:
+        ensure_app_dir()
+        normalize = getattr(core, "normalize_ledger", None)
+        normalized = normalize(doc) if normalize is not None else doc
+        _atomic_write_json(LEDGER_STATE_PATH, {"doc": normalized, "etag": etag})
+    except OSError as exc:
+        LOGGER.warning("保存本地账本失败：%s", exc)
+
+
+def _hhmm_reached(now: "datetime.datetime", value: str) -> bool:
+    """判断 HH:MM 是否已到（格式错误时返回 False）。"""
+    try:
+        hour, minute = [int(part) for part in str(value).strip().split(":", 1)]
+    except (TypeError, ValueError):
+        return False
+    return (now.hour, now.minute) >= (hour, minute)
+
+
+def _week_start(moment: "datetime.date") -> "datetime.date":
+    return moment - datetime.timedelta(days=moment.weekday())
 
 
 def acquire_single_instance() -> bool:
@@ -1016,6 +1103,11 @@ class Bridge(QObject):
     media_updated = pyqtSignal(dict)
     lyrics_ready = pyqtSignal(str, dict)
     sync_finished = pyqtSignal(dict)
+    ai_plan_ready = pyqtSignal(object)
+    ledger_sync_finished = pyqtSignal(dict)
+    report_ready = pyqtSignal(object)
+    mail_finished = pyqtSignal(dict)
+    memory_finished = pyqtSignal(dict)
 
 
 # ---------------------------------------------------------------------------
@@ -1280,6 +1372,514 @@ class SettingsDialog(QDialog):
         return updated
 
 
+class AdvancedSettingsDialog(QDialog):
+    """AI 规划 / 周报邮件 / 记忆仓库 / 账本的配置。"""
+
+    CATEGORIES = ["餐饮", "交通", "购物", "学习", "娱乐", "工资", "人情", "其他"]
+    WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+    def __init__(self, parent: Optional[QWidget], config: Dict[str, Any]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("高级设置：AI / 邮件 / 记忆 / 账本")
+        self.setModal(True)
+        self.resize(640, 560)
+        self._config = dict(config)
+
+        layout = QVBoxLayout(self)
+        tabs = QTabWidget()
+        layout.addWidget(tabs)
+
+        # --- AI ---
+        ai_page = QWidget()
+        ai_form = QFormLayout(ai_page)
+        self.ai_enabled = QCheckBox("启用 AI（复杂任务拆解 / 规划 / 每日评价）")
+        self.ai_enabled.setChecked(bool(config.get("ai_enabled", True)))
+        self.ai_base = QLineEdit(str(config.get("ai_base_url", "")))
+        self.ai_base.setPlaceholderText("https://api.deepseek.com")
+        self.ai_model = QLineEdit(str(config.get("ai_model", "deepseek-chat")))
+        self.ai_model.setPlaceholderText("deepseek-chat")
+        self.ai_key = QLineEdit(str(config.get("ai_api_key", "")))
+        self.ai_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ai_key.setPlaceholderText("sk-...（只保存在本机 config）")
+        ai_form.addRow("", self.ai_enabled)
+        ai_form.addRow("API Base URL", self.ai_base)
+        ai_form.addRow("Model", self.ai_model)
+        ai_form.addRow("API Key", self.ai_key)
+        tabs.addTab(ai_page, "🤖 AI")
+
+        # --- 周报邮件 ---
+        mail_page = QWidget()
+        mail_form = QFormLayout(mail_page)
+        self.mail_host = QLineEdit(str(config.get("mail_host", "smtp.gmail.com")))
+        self.mail_port = QSpinBox()
+        self.mail_port.setRange(1, 65535)
+        self.mail_port.setValue(int(config.get("mail_port", 465)))
+        self.mail_user = QLineEdit(str(config.get("mail_user", "")))
+        self.mail_user.setPlaceholderText("xxx@gmail.com")
+        self.mail_password = QLineEdit(str(config.get("mail_password", "")))
+        self.mail_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.mail_password.setPlaceholderText("Gmail 应用专用密码（不是登录密码）")
+        self.mail_to = QLineEdit(str(config.get("mail_to", "")))
+        self.mail_to.setPlaceholderText("收件邮箱，默认同发件邮箱")
+        self.report_enabled = QCheckBox("每周自动发送")
+        self.report_enabled.setChecked(bool(config.get("weekly_report_enabled", True)))
+        self.report_weekday = QComboBox()
+        self.report_weekday.addItems(self.WEEKDAYS)
+        self.report_weekday.setCurrentIndex(max(0, min(6, int(config.get("weekly_report_weekday", 7)) - 1)))
+        self.report_time = QLineEdit(str(config.get("weekly_report_time", "21:00")))
+        self.report_time.setPlaceholderText("21:00")
+        mail_form.addRow("SMTP 服务器", self.mail_host)
+        mail_form.addRow("端口（SSL）", self.mail_port)
+        mail_form.addRow("发件邮箱", self.mail_user)
+        mail_form.addRow("应用密码", self.mail_password)
+        mail_form.addRow("收件邮箱", self.mail_to)
+        mail_form.addRow("", self.report_enabled)
+        mail_form.addRow("发送日", self.report_weekday)
+        mail_form.addRow("发送时间", self.report_time)
+        tabs.addTab(mail_page, "📧 周报邮件")
+
+        # --- 记忆仓库 ---
+        memory_page = QWidget()
+        memory_form = QFormLayout(memory_page)
+        self.memory_enabled = QCheckBox("每天自动推送记忆到 GitHub 仓库")
+        self.memory_enabled.setChecked(bool(config.get("memory_enabled", True)))
+        self.memory_repo = QLineEdit(str(config.get("memory_repo", "luongthimydieu/taskbar-memory")))
+        self.memory_repo.setPlaceholderText("owner/repo")
+        self.memory_token = QLineEdit(str(config.get("memory_token", "")))
+        self.memory_token.setEchoMode(QLineEdit.EchoMode.Password)
+        self.memory_token.setPlaceholderText("需要 repo 写权限的 Token（可与同步 Token 相同）")
+        self.memory_branch = QLineEdit(str(config.get("memory_branch", "main")))
+        self.memory_time = QLineEdit(str(config.get("memory_time", "23:30")))
+        self.memory_time.setPlaceholderText("23:30")
+        memory_form.addRow("", self.memory_enabled)
+        memory_form.addRow("仓库", self.memory_repo)
+        memory_form.addRow("Token", self.memory_token)
+        memory_form.addRow("分支", self.memory_branch)
+        memory_form.addRow("每日推送时间", self.memory_time)
+        tabs.addTab(memory_page, "🧠 记忆仓库")
+
+        # --- 账本 ---
+        ledger_page = QWidget()
+        ledger_form = QFormLayout(ledger_page)
+        self.ledger_gist = QLineEdit(str(config.get("ledger_gist_id", "")))
+        self.ledger_gist.setPlaceholderText("独立 Gist ID（留空点“创建账本 Gist”）")
+        self.ledger_create_btn = QPushButton("创建账本 Gist")
+        self.ledger_create_btn.clicked.connect(self._create_ledger_gist)
+        ledger_form.addRow("账本 Gist ID", self.ledger_gist)
+        ledger_form.addRow("", self.ledger_create_btn)
+        ledger_hint = QLabel("账本与待办分开存：待办用 taskbar_todos.json，账本用 taskbar_ledger.json。")
+        ledger_hint.setWordWrap(True)
+        ledger_hint.setStyleSheet("color:#64748b;font-size:12px;")
+        ledger_form.addRow("", ledger_hint)
+        tabs.addTab(ledger_page, "💰 账本")
+
+        test_row = QHBoxLayout()
+        self.test_ai_btn = QPushButton("测试 AI")
+        self.test_mail_btn = QPushButton("发送测试邮件")
+        self.test_memory_btn = QPushButton("测试记忆仓库")
+        test_row.addWidget(self.test_ai_btn)
+        test_row.addWidget(self.test_mail_btn)
+        test_row.addWidget(self.test_memory_btn)
+        test_row.addStretch(1)
+        layout.addLayout(test_row)
+
+        buttons = QDialogButtonBox()
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.addButton(QDialogButtonBox.StandardButton.Save)
+        layout.addWidget(buttons)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        self.test_ai_btn.clicked.connect(self._test_ai)
+        self.test_mail_btn.clicked.connect(self._test_mail)
+        self.test_memory_btn.clicked.connect(self._test_memory)
+
+    # -- helpers ----------------------------------------------------------
+    def _current_config(self) -> Dict[str, Any]:
+        cfg = dict(self._config)
+        cfg.update(
+            {
+                "ai_enabled": self.ai_enabled.isChecked(),
+                "ai_base_url": self.ai_base.text().strip(),
+                "ai_model": self.ai_model.text().strip(),
+                "ai_api_key": self.ai_key.text().strip(),
+                "mail_host": self.mail_host.text().strip(),
+                "mail_port": self.mail_port.value(),
+                "mail_user": self.mail_user.text().strip(),
+                "mail_password": self.mail_password.text().strip(),
+                "mail_to": self.mail_to.text().strip() or self.mail_user.text().strip(),
+                "weekly_report_enabled": self.report_enabled.isChecked(),
+                "weekly_report_weekday": self.report_weekday.currentIndex() + 1,
+                "weekly_report_time": self.report_time.text().strip() or "21:00",
+                "memory_enabled": self.memory_enabled.isChecked(),
+                "memory_repo": self.memory_repo.text().strip(),
+                "memory_token": self.memory_token.text().strip(),
+                "memory_branch": self.memory_branch.text().strip() or "main",
+                "memory_time": self.memory_time.text().strip() or "23:30",
+                "ledger_gist_id": self.ledger_gist.text().strip(),
+            }
+        )
+        return cfg
+
+    def result_config(self) -> Dict[str, Any]:
+        return self._current_config()
+
+    def _test_ai(self) -> None:
+        cfg = self._current_config()
+        if not cfg.get("ai_api_key"):
+            QMessageBox.warning(self, "缺少 API Key", "请先填写 AI API Key。")
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            import ai_client  # 延迟导入，集成模块缺失时给出明确提示
+
+            client = ai_client.OpenAICompatibleClient(
+                base_url=cfg["ai_base_url"],
+                api_key=cfg["ai_api_key"],
+                model=cfg["ai_model"],
+                timeout=30,
+            )
+            reply = client.chat([{"role": "user", "content": "请只回复两个字：正常"}], temperature=0)
+            QMessageBox.information(self, "AI 连接成功", str(reply)[:300])
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "AI 连接失败", str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _test_mail(self) -> None:
+        cfg = self._current_config()
+        if not cfg.get("mail_user") or not cfg.get("mail_password"):
+            QMessageBox.warning(self, "缺少参数", "请先填写发件邮箱和应用密码。")
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            import reporting
+
+            reporting.send_email(cfg, "任务栏助手：测试邮件", "<p>这是一封测试邮件，说明 SMTP 配置可用。</p>")
+            QMessageBox.information(self, "发送成功", "测试邮件已发送，请查收。")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "发送失败", str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _test_memory(self) -> None:
+        cfg = self._current_config()
+        token = cfg.get("memory_token") or cfg.get("gh_token")
+        if not token or not cfg.get("memory_repo"):
+            QMessageBox.warning(self, "缺少参数", "请填写记忆仓库和带 repo 权限的 Token。")
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            import memory_sync
+
+            repo = memory_sync.MemoryRepo(
+                token=token,
+                repo=cfg["memory_repo"],
+                branch=cfg.get("memory_branch") or "main",
+            )
+            repo.ensure_repo()
+            QMessageBox.information(self, "仓库连接成功", f"可以写入 {cfg['memory_repo']}。")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "仓库连接失败", str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _create_ledger_gist(self) -> None:
+        token = self._config.get("gh_token", "").strip()
+        if not token:
+            QMessageBox.warning(self, "缺少参数", "请先在“同步”设置里填写 GitHub Token。")
+            return
+        ledger_store = getattr(core, "LedgerStore", None)
+        if ledger_store is None:
+            QMessageBox.warning(self, "模块未就绪", "当前版本还没有账本模块，请稍后重试。")
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            store = ledger_store(token=token, timeout=10)
+            gist_id = store.create_gist(core.empty_ledger())
+            self.ledger_gist.setText(gist_id)
+            QMessageBox.information(self, "创建成功", "已创建账本 Gist，ID 已填入，保存后生效。")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "创建失败", str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+
+
+class AddTodoDialog(QDialog):
+    """添加待办：可指定未来完成日期、优先级、预计耗时。"""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("添加待办")
+        self.setModal(True)
+        self.resize(480, 260)
+        form = QFormLayout()
+        self.text_edit = QLineEdit()
+        self.text_edit.setPlaceholderText("要做什么？")
+        form.addRow("内容", self.text_edit)
+
+        date_row = QHBoxLayout()
+        self.has_due = QCheckBox("指定目标完成日期")
+        self.due_edit = QDateEdit()
+        self.due_edit.setCalendarPopup(True)
+        self.due_edit.setDate(QDate.currentDate())
+        self.due_edit.setEnabled(False)
+        self.has_due.toggled.connect(self.due_edit.setEnabled)
+        date_row.addWidget(self.has_due)
+        date_row.addWidget(self.due_edit, 1)
+        form.addRow("目标日期", date_row)
+
+        self.priority_combo = QComboBox()
+        self.priority_combo.addItems(["普通", "🔥 紧急"])
+        form.addRow("优先级", self.priority_combo)
+        self.estimate_spin = QSpinBox()
+        self.estimate_spin.setRange(0, 6000)
+        self.estimate_spin.setSingleStep(15)
+        self.estimate_spin.setSuffix(" 分钟（0=未估）")
+        form.addRow("预计耗时", self.estimate_spin)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(form)
+        hint = QLabel("复杂任务可以在右键菜单用「🤖 AI 拆解复杂任务」自动拆成子任务。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#64748b;font-size:12px;")
+        layout.addWidget(hint)
+        buttons = QDialogButtonBox()
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.addButton(QDialogButtonBox.StandardButton.Save)
+        layout.addWidget(buttons)
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+
+    def _on_accept(self) -> None:
+        if not self.text_edit.text().strip():
+            QMessageBox.warning(self, "内容为空", "请输入待办内容。")
+            return
+        self.accept()
+
+    def values(self) -> Dict[str, Any]:
+        return {
+            "text": self.text_edit.text().strip(),
+            "due_date": self.due_edit.date().toString("yyyy-MM-dd") if self.has_due.isChecked() else "",
+            "priority": "high" if self.priority_combo.currentIndex() == 1 else "normal",
+            "estimate_minutes": int(self.estimate_spin.value()),
+        }
+
+
+class AiPlanDialog(QDialog):
+    """输入一个复杂任务，调用 AI 拆成多个带日期的小任务。"""
+
+    def __init__(self, parent: Optional[QWidget], config: Dict[str, Any]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("🤖 AI 拆解复杂任务")
+        self.setModal(True)
+        self.resize(700, 560)
+        self._config = dict(config)
+        self._plan: Optional[Dict[str, Any]] = None
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.task_edit = QLineEdit()
+        self.task_edit.setPlaceholderText("例如：两周内完成课程设计报告（含调研、实验、写作、答辩准备）")
+        form.addRow("复杂任务", self.task_edit)
+        self.horizon_spin = QSpinBox()
+        self.horizon_spin.setRange(3, 60)
+        self.horizon_spin.setValue(14)
+        self.horizon_spin.setSuffix(" 天内完成")
+        form.addRow("时间范围", self.horizon_spin)
+        layout.addLayout(form)
+
+        self.preview = QTextBrowser()
+        self.preview.setPlaceholderText("生成后在这里预览拆解结果…")
+        layout.addWidget(self.preview, 1)
+
+        row = QHBoxLayout()
+        self.generate_btn = QPushButton("生成计划")
+        self.add_btn = QPushButton("加入待办")
+        self.add_btn.setEnabled(False)
+        row.addWidget(self.generate_btn)
+        row.addWidget(self.add_btn)
+        row.addStretch(1)
+        layout.addLayout(row)
+        buttons = QDialogButtonBox()
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        layout.addWidget(buttons)
+        buttons.rejected.connect(self.reject)
+        self.generate_btn.clicked.connect(self._generate)
+        self.add_btn.clicked.connect(self._on_add)
+
+    def _generate(self) -> None:
+        cfg = self._config
+        if not cfg.get("ai_enabled", True) or not cfg.get("ai_api_key"):
+            QMessageBox.warning(self, "AI 未配置", "请先在「高级设置 → AI」里填写 API Key。")
+            return
+        text = self.task_edit.text().strip()
+        if not text:
+            QMessageBox.warning(self, "内容为空", "请输入复杂任务描述。")
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            import ai_client
+
+            client = ai_client.OpenAICompatibleClient(
+                base_url=cfg["ai_base_url"],
+                api_key=cfg["ai_api_key"],
+                model=cfg["ai_model"],
+                timeout=60,
+            )
+            plan = ai_client.plan_complex_task(
+                client, text, core.current_day(), horizon_days=int(self.horizon_spin.value())
+            )
+            self._plan = plan
+            lines = [f"**{plan.get('title') or text}**", ""]
+            for index, step in enumerate(plan.get("steps", []), start=1):
+                lines.append(
+                    f"{index}. {step.get('text', '')}  \n"
+                    f"    📅 {step.get('due_date', '')} · ⏱ {step.get('estimate_minutes', 0)} 分钟"
+                )
+            if plan.get("note"):
+                lines.extend(["", f"> {plan['note']}"])
+            self.preview.setMarkdown("\n".join(lines))
+            self.add_btn.setEnabled(bool(plan.get("steps")))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "生成失败", str(exc))
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _on_add(self) -> None:
+        if self._plan:
+            self.accept()
+
+    def plan(self) -> Optional[Dict[str, Any]]:
+        return self._plan
+
+
+class LedgerDialog(QDialog):
+    """记一笔 + 本周账本概览。"""
+
+    CATEGORIES = ["餐饮", "交通", "购物", "学习", "娱乐", "工资", "人情", "其他"]
+
+    def __init__(self, parent: Optional[QWidget], ledger_doc: Dict[str, Any]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("💰 记一笔 / 本周账本")
+        self.setModal(True)
+        self.resize(640, 520)
+        self._ledger = ledger_doc
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.date_edit = QDateEdit()
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setDate(QDate.currentDate())
+        self.type_combo = QComboBox()
+        self.type_combo.addItems(["支出", "收入"])
+        self.amount_spin = QDoubleSpinBox()
+        self.amount_spin.setDecimals(2)
+        self.amount_spin.setRange(0.0, 10_000_000.0)
+        self.amount_spin.setPrefix("¥ ")
+        self.category_combo = QComboBox()
+        self.category_combo.setEditable(True)
+        self.category_combo.addItems(self.CATEGORIES)
+        self.note_edit = QLineEdit()
+        self.note_edit.setPlaceholderText("备注（可选）")
+        form.addRow("日期", self.date_edit)
+        form.addRow("类型", self.type_combo)
+        form.addRow("金额", self.amount_spin)
+        form.addRow("分类", self.category_combo)
+        form.addRow("备注", self.note_edit)
+        layout.addLayout(form)
+
+        self.summary_label = QLabel()
+        self.summary_label.setStyleSheet("font-weight:600;padding:4px 0;")
+        layout.addWidget(self.summary_label)
+
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["日期", "类型", "金额", "分类", "备注"])
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        layout.addWidget(self.table, 1)
+
+        buttons = QDialogButtonBox()
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.addButton(QDialogButtonBox.StandardButton.Save)
+        layout.addWidget(buttons)
+        buttons.accepted.connect(self._on_accept)
+        buttons.rejected.connect(self.reject)
+        self._refresh()
+
+    def _week_start(self) -> Any:
+        today = core.current_day()
+        return today - __import__("datetime").timedelta(days=today.weekday())
+
+    def _refresh(self) -> None:
+        try:
+            summary = core.ledger_week_summary(self._ledger, self._week_start())
+        except Exception:  # noqa: BLE001
+            summary = {"income": 0, "expense": 0, "net": 0, "entries": []}
+        self.summary_label.setText(
+            f"本周：收入 {core.format_money(summary['income'])} · "
+            f"支出 {core.format_money(summary['expense'])} · "
+            f"结余 {core.format_money(summary['net'])}"
+        )
+        entries = summary.get("entries", [])
+        self.table.setRowCount(len(entries))
+        for row, entry in enumerate(entries):
+            values = [
+                str(entry.get("date", "")),
+                "收入" if entry.get("type") == "income" else "支出",
+                core.format_money(float(entry.get("amount", 0))),
+                str(entry.get("category", "")),
+                str(entry.get("note", "")),
+            ]
+            for col, value in enumerate(values):
+                self.table.setItem(row, col, QTableWidgetItem(value))
+
+    def _on_accept(self) -> None:
+        if self.amount_spin.value() <= 0:
+            QMessageBox.warning(self, "金额无效", "请输入大于 0 的金额。")
+            return
+        self.accept()
+
+    def values(self) -> Dict[str, Any]:
+        return {
+            "date": self.date_edit.date().toString("yyyy-MM-dd"),
+            "type": "income" if self.type_combo.currentIndex() == 1 else "expense",
+            "amount": round(float(self.amount_spin.value()), 2),
+            "category": self.category_combo.currentText().strip() or "其他",
+            "note": self.note_edit.text().strip(),
+        }
+
+
+class WeeklyReportDialog(QDialog):
+    """周报预览 + 手动发送。"""
+
+    def __init__(self, parent: Optional[QWidget], markdown: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("📊 周报预览")
+        self.setModal(True)
+        self.resize(760, 620)
+        self.send_requested = False
+        layout = QVBoxLayout(self)
+        browser = QTextBrowser()
+        browser.setMarkdown(markdown)
+        layout.addWidget(browser, 1)
+        row = QHBoxLayout()
+        preview_hint = QLabel("如果配置了 Gmail SMTP，可直接发送到邮箱。")
+        preview_hint.setStyleSheet("color:#64748b;font-size:12px;")
+        row.addWidget(preview_hint)
+        row.addStretch(1)
+        send_btn = QPushButton("📤 发送到邮箱")
+        close_btn = QPushButton("关闭")
+        row.addWidget(send_btn)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+        send_btn.clicked.connect(self._on_send)
+        close_btn.clicked.connect(self.reject)
+
+    def _on_send(self) -> None:
+        self.send_requested = True
+        self.accept()
+
+
 # ---------------------------------------------------------------------------
 # 主窗口
 # ---------------------------------------------------------------------------
@@ -1302,9 +1902,22 @@ class TaskbarWidget(QWidget):
         self.bridge.media_updated.connect(self.on_media_updated)
         self.bridge.lyrics_ready.connect(self.on_lyrics_ready)
         self.bridge.sync_finished.connect(self.on_sync_finished)
+        self.bridge.ledger_sync_finished.connect(self.on_ledger_sync_finished)
+        self.bridge.mail_finished.connect(self.on_mail_finished)
+        self.bridge.memory_finished.connect(self.on_memory_finished)
 
         self.netease = core.NetEaseClient()
         self.store = self._build_store()
+
+        # 记账（独立 Gist + 本地缓存）
+        ledger_state = load_ledger_state()
+        self.ledger_doc: Dict[str, Any] = ledger_state["doc"]
+        self.ledger_etag: Optional[str] = ledger_state.get("etag")
+        self.ledger_store = self._build_ledger_store()
+        self._ledger_sync_running = False
+        self._ledger_sync_thread: Optional[threading.Thread] = None
+        self._memory_running = False
+        self._mail_running = False
 
         # 媒体 / 歌词状态
         self._media: Optional[Dict[str, Any]] = None
@@ -1853,6 +2466,21 @@ class TaskbarWidget(QWidget):
         self.fullscreen_timer.timeout.connect(self._check_fullscreen_state)
         self.fullscreen_timer.start(1000)
 
+        # 账本同步（独立 Gist，30 秒一次）
+        if not self.selftest:
+            self.ledger_timer = QTimer(self)
+            self.ledger_timer.timeout.connect(self.request_ledger_sync)
+            self.ledger_timer.start(30000)
+
+            # 每日记忆推送 / 每周周报邮件：每 30 秒检查一次时间点
+            self.report_timer = QTimer(self)
+            self.report_timer.timeout.connect(self._check_scheduled_jobs)
+            self.report_timer.start(30000)
+
+            QTimer.singleShot(2500, self._ensure_ledger_gist)
+            QTimer.singleShot(4000, self.request_ledger_sync)
+            QTimer.singleShot(5000, self._check_scheduled_jobs)
+
         try:
             app = QGuiApplication.instance()
             if app is not None:
@@ -2020,9 +2648,11 @@ class TaskbarWidget(QWidget):
         if todo is None:
             return "📋 今天没有待办 · 22:00 提醒你填明天的"
         if core.todo_day(todo) == today:
-            return core.format_next_todo_line(todo, len(core.todos_for_day(self.doc, today)))
+            return core.format_next_todo_line(
+                todo, len(core.todos_for_day(self.doc, today)), doc=self.doc
+            )
         return core.format_next_todo_line(
-            todo, len(core.overdue_todos(self.doc, today)), lead="逾期"
+            todo, len(core.overdue_todos(self.doc, today)), lead="逾期", doc=self.doc
         )
 
     def _fill_hint_line(self) -> str:
@@ -2649,6 +3279,17 @@ class TaskbarWidget(QWidget):
             menu.addAction("👌 本次忽略", self.dismiss_alert)
             menu.addSeparator()
 
+        quick_menu = menu.addMenu("➕ 待办 / 记账 / 周报 / 记忆")
+        quick_menu.addAction("➕ 添加待办…", self.add_todo_dialog)
+        quick_menu.addAction("🤖 AI 拆解复杂任务…", self.ai_plan_dialog)
+        quick_menu.addAction("💰 记一笔 / 本周账本…", self.ledger_dialog)
+        quick_menu.addAction("📊 周报预览…", self.show_weekly_report)
+        quick_menu.addAction("📤 立即发送周报", self.send_weekly_report_thread)
+        quick_menu.addAction("🧠 立即推送今日记忆", self.push_memory_thread)
+        quick_menu.addSeparator()
+        quick_menu.addAction("⚙️ AI / 邮件 / 记忆设置…", self.open_advanced_settings)
+        menu.addSeparator()
+
         mode_menu = menu.addMenu("🔀 显示模式")
         group = QActionGroup(mode_menu)
         group.setExclusive(True)
@@ -2694,7 +3335,7 @@ class TaskbarWidget(QWidget):
             empty.setEnabled(False)
         else:
             for item in pending[:15]:
-                label = core.format_todo_line(item)
+                label = core.format_todo_line(item, doc=self.doc)
                 action = QAction(f"⬜ {label}", todo_menu)
                 action.triggered.connect(lambda _checked, tid=item["id"]: self.complete_todo(tid))
                 todo_menu.addAction(action)
@@ -2792,6 +3433,396 @@ class TaskbarWidget(QWidget):
         self._persist_and_sync()
         self.refresh_texts()
 
+    # ==================== v1.3 待办 / 记账 / 周报 / 记忆 ====================
+    def _build_ledger_store(self) -> Any:
+        store_cls = getattr(core, "LedgerStore", None)
+        if store_cls is None:
+            return None
+        token = str(self.config.get("gh_token", "") or "").strip()
+        gist_id = str(self.config.get("ledger_gist_id", "") or "").strip()
+        if not token or not gist_id:
+            return None
+        try:
+            return store_cls(token=token, gist_id=gist_id, timeout=8)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _ensure_ledger_gist(self) -> None:
+        if self.config.get("ledger_gist_id"):
+            self.ledger_store = self._build_ledger_store()
+            return
+        token = str(self.config.get("gh_token", "") or "").strip()
+        store_cls = getattr(core, "LedgerStore", None)
+        if not token or store_cls is None:
+            return
+        self._notify("账本", "首次使用记账，正在创建专用账本 Gist…")
+
+        def worker() -> None:
+            try:
+                store = store_cls(token=token, timeout=15)
+                gist_id = store.create_gist(self.ledger_doc)
+                self.bridge.ledger_sync_finished.emit(
+                    {"ok": True, "created_gist": gist_id, "doc": self.ledger_doc, "etag": None}
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("创建账本 Gist 失败：%s", exc)
+                self.bridge.ledger_sync_finished.emit({"ok": False, "error": str(exc)})
+
+        threading.Thread(target=worker, daemon=True, name="LedgerGistCreate").start()
+
+    def request_ledger_sync(self) -> None:
+        if self.ledger_store is None or self._ledger_sync_running:
+            return
+        self._ledger_sync_running = True
+        snapshot = json.loads(json.dumps(self.ledger_doc))
+        etag = self.ledger_etag
+        self._ledger_sync_thread = threading.Thread(
+            target=self._ledger_sync_worker, args=(snapshot, etag), daemon=True, name="LedgerSync"
+        )
+        self._ledger_sync_thread.start()
+
+    def _ledger_sync_worker(self, local_doc: Dict[str, Any], etag: Optional[str]) -> None:
+        assert self.ledger_store is not None
+        try:
+            report = self.ledger_store.sync(local_doc, etag)
+            self.bridge.ledger_sync_finished.emit(
+                {"ok": True, "doc": report.doc, "etag": report.etag, "status": getattr(report, "status", "")}
+            )
+        except core.GitHubApiError as exc:
+            self.bridge.ledger_sync_finished.emit({"ok": False, "error": str(exc)})
+        except requests.RequestException as exc:
+            self.bridge.ledger_sync_finished.emit({"ok": False, "error": f"网络错误：{exc}"})
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("账本同步线程异常")
+            self.bridge.ledger_sync_finished.emit({"ok": False, "error": str(exc)})
+
+    def on_ledger_sync_finished(self, result: Dict[str, Any]) -> None:
+        self._ledger_sync_running = False
+        created = str(result.get("created_gist") or "").strip()
+        if created:
+            self.config["ledger_gist_id"] = created
+            save_config(self.config)
+            self.ledger_store = self._build_ledger_store()
+            self.ledger_etag = None
+            self._notify("账本", "已创建专用账本 Gist，记账会同步到云端")
+            return
+        if result.get("ok") and result.get("doc"):
+            self.ledger_doc = result["doc"]
+            self.ledger_etag = result.get("etag")
+            save_ledger_state(self.ledger_doc, self.ledger_etag)
+            self.refresh_texts()
+        elif result.get("error"):
+            LOGGER.warning("账本同步失败：%s", result["error"])
+
+    def _persist_ledger(self) -> None:
+        save_ledger_state(self.ledger_doc, self.ledger_etag)
+        self.request_ledger_sync()
+
+    def add_todo_dialog(self) -> None:
+        dialog = AddTodoDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        try:
+            self.doc, _todo = core.add_todo(
+                self.doc,
+                values["text"],
+                priority=values["priority"],
+                due_date=values["due_date"],
+                estimate_minutes=values["estimate_minutes"],
+            )
+        except TypeError:
+            # 兼容 core 还没升级的情况
+            self.doc, _todo = core.add_todo(self.doc, values["text"], priority=values["priority"])
+        self._persist_and_sync()
+        self.refresh_texts()
+        due = f"（目标 {values['due_date']}）" if values["due_date"] else ""
+        self._notify("已添加待办", f"{values['text']}{due}")
+
+    def ai_plan_dialog(self) -> None:
+        if not str(self.config.get("ai_api_key", "")).strip():
+            answer = QMessageBox.question(
+                self,
+                "AI 未配置",
+                "还没有填写 AI API Key，是否现在打开设置？",
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.open_advanced_settings()
+            return
+        dialog = AiPlanDialog(self, self.config)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        plan = dialog.plan() or {}
+        steps = plan.get("steps") or []
+        if not steps:
+            QMessageBox.warning(self, "没有拆解结果", "AI 没有返回可用的子任务。")
+            return
+        title = str(plan.get("title") or "复杂任务")
+        parent_due = str(steps[-1].get("due_date") or "")
+        total_minutes = sum(int(step.get("estimate_minutes") or 0) for step in steps)
+        try:
+            self.doc, parent = core.add_todo(
+                self.doc, title, priority="normal", due_date=parent_due, estimate_minutes=total_minutes
+            )
+        except TypeError:
+            self.doc, parent = core.add_todo(self.doc, title)
+        parent_id = str(parent["id"])
+        for step in steps:
+            try:
+                self.doc, _child = core.add_todo(
+                    self.doc,
+                    str(step.get("text") or "").strip(),
+                    due_date=str(step.get("due_date") or ""),
+                    parent_id=parent_id,
+                    estimate_minutes=int(step.get("estimate_minutes") or 0),
+                )
+            except TypeError:
+                self.doc, _child = core.add_todo(self.doc, str(step.get("text") or ""))
+        self._persist_and_sync()
+        self.refresh_texts()
+        self._notify("AI 拆解完成", f"《{title}》已拆成 {len(steps)} 个子任务")
+
+    def ledger_dialog(self) -> None:
+        dialog = LedgerDialog(self, self.ledger_doc)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        try:
+            self.ledger_doc, _entry = core.add_ledger_entry(
+                self.ledger_doc,
+                values["date"],
+                values["type"],
+                values["amount"],
+                values["category"],
+                values["note"],
+            )
+        except AttributeError:
+            QMessageBox.warning(self, "模块未就绪", "账本模块还没准备好，请稍后重试。")
+            return
+        self._persist_ledger()
+        self.refresh_texts()
+        self._notify(
+            "已记账",
+            f"{'收入' if values['type'] == 'income' else '支出'} {core.format_money(values['amount'])} · {values['category']}",
+        )
+
+    # ---- AI / 报表 ----
+    def _ai_client(self) -> Any:
+        if not bool(self.config.get("ai_enabled", True)):
+            return None
+        key = str(self.config.get("ai_api_key", "") or "").strip()
+        if not key:
+            return None
+        try:
+            import ai_client
+
+            return ai_client.OpenAICompatibleClient(
+                base_url=str(self.config.get("ai_base_url") or "https://api.deepseek.com"),
+                api_key=key,
+                model=str(self.config.get("ai_model") or "deepseek-chat"),
+                timeout=60,
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("AI 客户端不可用：%s", exc)
+            return None
+
+    def _today_context(self) -> str:
+        today = core.current_day()
+        todos = self.doc.get("todos", [])
+        done_today = [
+            item for item in todos
+            if item.get("done") and str(item.get("done_at", ""))[:10] == today.isoformat()
+        ]
+        pending = core.pending_todos(self.doc)
+        overdue = [
+            item for item in pending
+            if str(item.get("due_date") or "") and str(item.get("due_date")) < today.isoformat()
+        ]
+        try:
+            week = core.ledger_week_summary(self.ledger_doc, _week_start(today))
+            ledger_text = (
+                f"本周收入 {core.format_money(week['income'])}，"
+                f"支出 {core.format_money(week['expense'])}，结余 {core.format_money(week['net'])}"
+            )
+        except Exception:  # noqa: BLE001
+            ledger_text = "账本暂无数据"
+        lines = [
+            f"日期：{today.isoformat()}",
+            f"今日完成（{len(done_today)}）：" + "；".join(item.get("text", "") for item in done_today[:8]),
+            f"未完成（{len(pending)}）：" + "；".join(item.get("text", "") for item in pending[:8]),
+            f"逾期（{len(overdue)}）：" + "；".join(item.get("text", "") for item in overdue[:8]),
+            f"账本：{ledger_text}",
+        ]
+        return "\n".join(lines)
+
+    def _weekly_context(self) -> str:
+        data = core.weekly_report_data(self.doc, self.ledger_doc, _week_start(core.current_day()))
+        return json.dumps(
+            {
+                "week": f"{data.get('week_start')} ~ {data.get('week_end')}",
+                "completed": [item.get("text", "") for item in data.get("completed", [])],
+                "pending": [item.get("text", "") for item in data.get("pending", [])],
+                "overdue": [item.get("text", "") for item in data.get("overdue", [])],
+                "improvements": data.get("improvements", []),
+                "ledger": data.get("ledger", {}),
+            },
+            ensure_ascii=False,
+        )[:6000]
+
+    def _ai_evaluate(self, kind: str) -> str:
+        client = self._ai_client()
+        if client is None:
+            return ""
+        try:
+            import ai_client
+
+            context = self._weekly_context() if kind == "week" else self._today_context()
+            return str(ai_client.evaluate(kind, client, context) or "")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("AI 评价失败（%s）：%s", kind, exc)
+            return ""
+
+    def build_weekly_report(self) -> Tuple[Dict[str, Any], str, str]:
+        data = core.weekly_report_data(self.doc, self.ledger_doc, _week_start(core.current_day()))
+        ai_comment = self._ai_evaluate("week")
+        markdown = core.weekly_report_markdown(data, ai_comment)
+        return data, markdown, ai_comment
+
+    def show_weekly_report(self) -> None:
+        try:
+            _data, markdown, _ai = self.build_weekly_report()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "周报生成失败", str(exc))
+            return
+        dialog = WeeklyReportDialog(self, markdown)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.send_requested:
+            self.send_weekly_report_thread(preview_markdown=markdown)
+
+    def send_weekly_report_thread(self, preview_markdown: str = "") -> None:
+        if self._mail_running:
+            return
+        if not self.config.get("mail_user") or not self.config.get("mail_password"):
+            answer = QMessageBox.question(
+                self,
+                "邮件未配置",
+                "还没有填写 Gmail 发件邮箱和应用密码，是否现在打开设置？",
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.open_advanced_settings()
+            return
+        self._mail_running = True
+        self._notify("周报", "正在生成并发送周报…")
+        config_snapshot = dict(self.config)
+        doc_snapshot = json.loads(json.dumps(self.doc))
+        ledger_snapshot = json.loads(json.dumps(self.ledger_doc))
+
+        def worker() -> None:
+            try:
+                import reporting
+
+                data = core.weekly_report_data(
+                    doc_snapshot, ledger_snapshot, _week_start(core.current_day())
+                )
+                ai_comment = self._ai_evaluate("week")
+                subject, html, text = reporting.build_weekly_email(data, ai_comment)
+                reporting.send_email(config_snapshot, subject, html, text)
+                self.bridge.mail_finished.emit({"ok": True, "subject": subject})
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("发送周报失败")
+                self.bridge.mail_finished.emit({"ok": False, "error": str(exc)})
+
+        threading.Thread(target=worker, daemon=True, name="WeeklyMail").start()
+
+    # ---- 每日记忆推送 ----
+    def push_memory_thread(self) -> None:
+        if self._memory_running:
+            return
+        token = str(self.config.get("memory_token", "") or self.config.get("gh_token", "") or "").strip()
+        if not token or not self.config.get("memory_repo"):
+            QMessageBox.warning(self, "记忆仓库未配置", "请先在「高级设置 → 记忆仓库」填写仓库和 Token。")
+            return
+        self._memory_running = True
+        self._notify("记忆", "正在生成并推送今日记忆…")
+        config_snapshot = dict(self.config)
+        config_snapshot["memory_token"] = token
+        doc_snapshot = json.loads(json.dumps(self.doc))
+        ledger_snapshot = json.loads(json.dumps(self.ledger_doc))
+        moment = datetime.datetime.now()
+
+        def worker() -> None:
+            try:
+                import memory_sync
+
+                ai_comment = self._ai_evaluate("day")
+                memory_sync.push_daily_memory(
+                    config_snapshot, doc_snapshot, ledger_snapshot, moment, ai_comment
+                )
+                self.bridge.memory_finished.emit({"ok": True, "date": moment.strftime("%Y-%m-%d")})
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("推送今日记忆失败")
+                self.bridge.memory_finished.emit({"ok": False, "error": str(exc)})
+
+        threading.Thread(target=worker, daemon=True, name="DailyMemory").start()
+
+    def _check_scheduled_jobs(self) -> None:
+        now = datetime.datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        if bool(self.config.get("memory_enabled", True)) and _hhmm_reached(
+            now, str(self.config.get("memory_time") or "23:30")
+        ):
+            if str(self.config.get("last_memory_date") or "") != today:
+                self.config["last_memory_date"] = today
+                save_config(self.config)
+                self.push_memory_thread()
+        if bool(self.config.get("weekly_report_enabled", True)):
+            iso = now.isocalendar()
+            week_key = f"{iso[0]}-W{iso[1]:02d}"
+            try:
+                target_weekday = int(self.config.get("weekly_report_weekday") or 7)
+            except (TypeError, ValueError):
+                target_weekday = 7
+            if (
+                now.isoweekday() == target_weekday
+                and _hhmm_reached(now, str(self.config.get("weekly_report_time") or "21:00"))
+                and str(self.config.get("last_report_week") or "") != week_key
+            ):
+                self.config["last_report_week"] = week_key
+                save_config(self.config)
+                self.send_weekly_report_thread()
+
+    def on_mail_finished(self, result: Dict[str, Any]) -> None:
+        self._mail_running = False
+        if result.get("ok"):
+            self._notify("周报已发送", str(result.get("subject") or "本周总结"))
+        else:
+            self._notify("周报发送失败", str(result.get("error") or "未知错误"))
+
+    def on_memory_finished(self, result: Dict[str, Any]) -> None:
+        self._memory_running = False
+        if result.get("ok"):
+            self._notify("记忆已推送", f"已写入 taskbar-memory（{result.get('date')}）")
+        else:
+            self._notify("记忆推送失败", str(result.get("error") or "未知错误"))
+
+    def open_advanced_settings(self) -> None:
+        dialog = AdvancedSettingsDialog(self, self.config)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.config.update(dialog.result_config())
+        save_config(self.config)
+        self.ledger_store = self._build_ledger_store()
+        self.ledger_etag = None
+        self._ensure_ledger_gist()
+        self.request_ledger_sync()
+        self.refresh_texts()
+
+    def _notify(self, title: str, message: str) -> None:
+        LOGGER.info("%s：%s", title, message)
+        if getattr(self, "_tray", None) is not None:
+            self._tray.showMessage(
+                title, message, QSystemTrayIcon.MessageIcon.Information, 4000
+            )
+
     def open_settings(self) -> None:
         dialog = SettingsDialog(self, self.config, self.doc)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -2801,7 +3832,10 @@ class TaskbarWidget(QWidget):
         self.store = self._build_store()
         self.etag = None
         self._sync_running = False
+        self.ledger_store = self._build_ledger_store()
+        self._ensure_ledger_gist()
         self.request_sync()
+        self.request_ledger_sync()
         self.refresh_texts()
 
     def show_about(self) -> None:
@@ -2825,6 +3859,13 @@ class TaskbarWidget(QWidget):
         self._tray.setToolTip(APP_TITLE)
         tray_menu = QMenu(self)
         tray_menu.addAction("显示 / 隐藏", self.toggle_visibility)
+        tray_quick = tray_menu.addMenu("➕ 待办 / 记账 / 周报")
+        tray_quick.addAction("➕ 添加待办…", self.add_todo_dialog)
+        tray_quick.addAction("🤖 AI 拆解复杂任务…", self.ai_plan_dialog)
+        tray_quick.addAction("💰 记一笔…", self.ledger_dialog)
+        tray_quick.addAction("📊 周报预览…", self.show_weekly_report)
+        tray_quick.addAction("📤 立即发送周报", self.send_weekly_report_thread)
+        tray_quick.addAction("🧠 立即推送今日记忆", self.push_memory_thread)
         tray_menu.addAction("📌 重新贴合任务栏", self.reapply_taskbar_layout)
         tray_menu.addAction("🔄 立即同步", self.request_sync)
         daily_tray_action = QAction("⏰ 每天 22:00 提醒填待办", tray_menu)
@@ -2851,6 +3892,7 @@ class TaskbarWidget(QWidget):
         lyric_tray_menu.addSeparator()
         lyric_tray_menu.addAction("重置偏移（0s）", self.reset_lyric_offset)
         tray_menu.addAction("⚙️ 配置同步", self.open_settings)
+        tray_menu.addAction("⚙️ AI / 邮件 / 记忆设置", self.open_advanced_settings)
         tray_menu.addSeparator()
         tray_menu.addAction("退出", QApplication.quit)
         self._tray.setContextMenu(tray_menu)
@@ -2944,6 +3986,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.selftest:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        try:
+            import ai_client  # noqa: F401
+            import memory_sync  # noqa: F401
+            import reporting  # noqa: F401
+
+            LOGGER.info("selftest: ai_client / reporting / memory_sync 导入成功")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.error("selftest: 集成模块导入失败：%s", exc)
+            return 1
 
     app = QApplication([sys.argv[0]] + qt_args)
     app.setApplicationName(APP_NAME)

@@ -61,7 +61,7 @@
     .config-panel.active { display: block; }
     .field { margin-bottom: 11px; }
     .field label { display: block; font-size: 0.76rem; color: var(--muted); margin-bottom: 6px; }
-    input[type="text"], input[type="password"], input[type="time"], input[type="date"], select, textarea {
+    input[type="text"], input[type="password"], input[type="time"], input[type="date"], input[type="number"], select, textarea {
       width: 100%; background: #0b1220; border: 1px solid var(--border); color: var(--text);
       padding: 11px 12px; border-radius: 10px; font-size: 0.92rem; outline: none;
       font-family: inherit; appearance: none;
@@ -146,6 +146,38 @@
     .modal-card h2 { font-size: 1rem; margin-bottom: 13px; }
     .modal-actions { display: flex; gap: 9px; margin-top: 14px; }
     .modal-actions > * { flex: 1; }
+    .hidden { display: none !important; }
+
+    .badge.due { background: rgba(245, 158, 11, 0.16); color: var(--warning); }
+    .badge.due.overdue { background: rgba(244, 63, 94, 0.18); color: var(--danger); }
+    .badge.progress { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+    .todo-item.subtask { margin-left: 26px; border-left: 3px solid rgba(56, 189, 248, 0.35); }
+    .todo-item.subtask .todo-title::before { content: "↳ "; color: var(--muted); }
+
+    .ledger-form { display: flex; flex-direction: column; gap: 9px; }
+    .ledger-summary { display: flex; gap: 8px; margin-top: 13px; }
+    .summary-box {
+      flex: 1; background: var(--card-soft); border: 1px solid var(--border); border-radius: 12px;
+      padding: 9px 8px; text-align: center; min-width: 0;
+    }
+    .summary-box span { font-size: 0.7rem; color: var(--muted); }
+    .summary-box b { display: block; font-size: 0.95rem; margin-top: 3px; word-break: break-all; }
+    .summary-box.income b { color: var(--success); }
+    .summary-box.expense b { color: var(--danger); }
+    .summary-box.net b { color: var(--accent); }
+    .ledger-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+    .ledger-item {
+      display: flex; align-items: center; gap: 10px; background: var(--card-soft);
+      border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px;
+    }
+    .ledger-item .info { flex: 1; min-width: 0; }
+    .ledger-item .cat { font-size: 0.86rem; font-weight: 600; }
+    .ledger-item .sub { font-size: 0.7rem; color: var(--muted); margin-top: 2px; word-break: break-word; }
+    .ledger-item .amt { font-weight: 700; font-size: 0.92rem; white-space: nowrap; }
+    .ledger-item.income .amt { color: var(--success); }
+    .ledger-item.expense .amt { color: var(--danger); }
+    .ledger-empty { text-align: center; color: var(--muted); font-size: 0.82rem; padding: 14px 0 4px; }
+
     .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   </style>
 </head>
@@ -171,6 +203,10 @@
       <label for="gistId">Gist ID（留空可点「创建新 Gist」自动生成）</label>
       <input type="text" id="gistId" placeholder="例如：a1b2c3d4e5f6..." autocomplete="off" />
     </div>
+    <div class="field">
+      <label for="ledgerGistId">账本 Gist ID（独立 Gist，留空＝仅本机记账）</label>
+      <input type="text" id="ledgerGistId" placeholder="例如：f6e5d4c3b2a1..." autocomplete="off" />
+    </div>
     <div class="row">
       <button type="button" id="saveConfigBtn">保存并同步</button>
       <button type="button" class="secondary" id="createGistBtn">创建新 Gist</button>
@@ -179,14 +215,18 @@
       <button type="button" class="secondary" id="syncNowBtn">🔄 立即同步</button>
       <button type="button" class="secondary" id="hideConfigBtn">收起配置</button>
     </div>
+    <div class="row" style="margin-top:9px;">
+      <button type="button" class="secondary" id="createLedgerGistBtn">📒 创建账本 Gist</button>
+    </div>
     <p class="hint">
       Token 只保存在本机浏览器 localStorage 中，不会写进仓库；Gist 为「不公开列表」的私密 Gist。
       电脑端右键任务栏胶囊 →「配置 GitHub Gist 云同步」填入同一组 Token + Gist ID 即可双向同步。
+      账本使用独立 Gist 文件 taskbar_ledger.json；未填账本 Gist ID 时账本只存在本机。
     </p>
   </section>
 
   <!-- 添加待办 -->
-  <section class="card">
+  <section class="card todo-only">
     <div class="add-form">
       <label class="sr-only" for="todoInput">待办内容</label>
       <input type="text" id="todoInput" placeholder="输入今天要做的事（会在电脑任务栏轮播）..." maxlength="200" />
@@ -203,9 +243,12 @@
         </select>
         <button type="button" id="addBtn">+ 添加</button>
       </div>
+      <label class="sr-only" for="todoDue">目标完成日期（可空）</label>
+      <input type="date" id="todoDue" aria-label="目标完成日期（可空）" title="目标完成日期：可选，留空表示不指定" />
     </div>
     <p class="hint" style="margin-top:9px;">
-      ⏰ 22:00 之后添加的待办会自动算到「明天」，凌晨 2:00 起出现在电脑任务栏；每天 22:00 电脑端也会提醒你填明天的待办。
+      ⏰ 22:00 之后添加的待办会自动算到「明天」，凌晨 2:00 起出现在电脑任务栏；每天 22:00 电脑端也会提醒你填明天的待办。<br />
+      📅 目标完成日期可选：指定后列表显示「今天 / 明天 / MM-DD」，逾期标红，电脑端也会同步展示。
     </p>
   </section>
 
@@ -214,16 +257,42 @@
     <div class="tab active" data-filter="pending" role="button" tabindex="0">未完成 (<span id="count-pending">0</span>)</div>
     <div class="tab" data-filter="all" role="button" tabindex="0">全部 (<span id="count-all">0</span>)</div>
     <div class="tab" data-filter="done" role="button" tabindex="0">已完成 (<span id="count-done">0</span>)</div>
+    <div class="tab" data-filter="ledger" role="button" tabindex="0">💰 账本</div>
   </nav>
 
-  <div class="daily-tip" id="dailyTip"></div>
+  <div class="daily-tip todo-only" id="dailyTip"></div>
 
-  <main class="todo-list" id="todoList"></main>
+  <main class="todo-list todo-only" id="todoList"></main>
 
-  <div class="footer">
+  <div class="footer todo-only" id="todoFooter">
     <button type="button" class="secondary" id="clearDoneBtn">清除已完成</button>
     <span id="syncDetail">尚未同步</span>
   </div>
+
+  <!-- 账本（本周收支） -->
+  <section class="card hidden" id="ledgerPanel">
+    <div class="add-form ledger-form">
+      <div class="row">
+        <label class="sr-only" for="ledgerDate">记账日期</label>
+        <input type="date" id="ledgerDate" aria-label="记账日期" />
+        <select id="ledgerType" aria-label="收支类型">
+          <option value="expense">支出</option>
+          <option value="income">收入</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="sr-only" for="ledgerAmount">金额</label>
+        <input type="number" id="ledgerAmount" inputmode="decimal" step="0.01" min="0" placeholder="金额（元）" aria-label="金额" />
+        <input type="text" id="ledgerCategory" placeholder="分类（餐饮 / 交通 / 工资…）" maxlength="20" aria-label="分类" />
+      </div>
+      <label class="sr-only" for="ledgerNote">备注</label>
+      <input type="text" id="ledgerNote" placeholder="备注（可选）" maxlength="80" aria-label="备注" />
+      <button type="button" id="addLedgerBtn">🧾 记一笔</button>
+    </div>
+    <div class="ledger-summary" id="ledgerSummary"></div>
+    <p class="hint" id="ledgerSyncHint" style="margin-top:10px;">账本仅保存在本机</p>
+    <div class="ledger-list" id="ledgerList"></div>
+  </section>
 
   <div class="toast" id="toast"></div>
 
@@ -247,6 +316,10 @@
           <option value="high">🔥 紧急</option>
         </select>
       </div>
+      <div class="field" style="margin-top:11px;margin-bottom:0;">
+        <label for="editDue">目标完成日期（可空）</label>
+        <input type="date" id="editDue" aria-label="目标完成日期（可空）" />
+      </div>
       <div class="modal-actions">
         <button type="button" class="secondary" id="editCancelBtn">取消</button>
         <button type="button" id="editSaveBtn">保存</button>
@@ -256,15 +329,20 @@
 
   <script>
   /* ========================================================================
-   * 同步协议 v2 —— 与 desktop/core.py 完全一致的纯函数实现。
+   * 同步协议 v3 —— 与 desktop/core.py 完全一致的纯函数实现。
    * 浏览器端与 Node 测试脚本共用：通过 window.__TBL_PROTOCOL__ 暴露，
    * 因此这里不做任何 DOM / localStorage 操作。
    * ====================================================================== */
   (function () {
     'use strict';
 
-    const SCHEMA_VERSION = 2;
+    const SCHEMA_VERSION = 3;
     const GIST_FILENAME = 'taskbar_todos.json';
+    const LEDGER_SCHEMA_VERSION = 1;
+    const LEDGER_FILENAME = 'taskbar_ledger.json';
+    const LEDGER_INCOME = 'income';
+    const LEDGER_EXPENSE = 'expense';
+    const LEDGER_DEFAULT_CATEGORY = '其他';
     const EPOCH_ISO = '1970-01-01T00:00:00+00:00';
     const REMIND_GRACE_SECONDS = 24 * 3600;
     const TOMBSTONE_TTL_DAYS = 180;
@@ -320,11 +398,43 @@
       const value = String(text || '').trim();
       return TIME_RE.test(value) ? value : '';
     }
-    function normalizeRemindDate(text) {
+
+    // 日期归一化：先查格式，再按“构造后回读”过滤 2026-02-30 这类不存在的日期，
+    // 与 Python 的 date.fromisoformat 校验行为一致。
+    function normalizeDate(text) {
       const value = String(text || '').trim();
       if (!DATE_RE.test(value)) return '';
-      const date = new Date(value + 'T00:00:00');
-      return Number.isNaN(date.getTime()) ? '' : value;
+      const year = parseInt(value.slice(0, 4), 10);
+      const month = parseInt(value.slice(5, 7), 10);
+      const day = parseInt(value.slice(8, 10), 10);
+      if (!(month >= 1 && month <= 12 && day >= 1 && day <= 31)) return '';
+      const probe = new Date(1970, 0, 1);
+      probe.setFullYear(year, month - 1, day);
+      if (probe.getFullYear() !== year || probe.getMonth() !== month - 1 || probe.getDate() !== day) return '';
+      return value;
+    }
+    const normalizeRemindDate = normalizeDate;
+    const normalizeDueDate = normalizeDate;
+
+    function parseDayText(text) {
+      const value = normalizeDate(text);
+      if (!value) return null;
+      const date = new Date(1970, 0, 1);
+      date.setFullYear(
+        parseInt(value.slice(0, 4), 10),
+        parseInt(value.slice(5, 7), 10) - 1,
+        parseInt(value.slice(8, 10), 10)
+      );
+      return date;
+    }
+    function normalizeParentId(value) {
+      return String(value || '').trim();
+    }
+    function normalizeEstimateMinutes(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return 0;
+      const minutes = Math.trunc(number);
+      return minutes > 0 ? minutes : 0;
     }
 
     function normalizeTodo(raw) {
@@ -337,16 +447,27 @@
       let priority = String(raw.priority || PRIORITY_NORMAL).trim().toLowerCase();
       if (priority !== PRIORITY_HIGH) priority = PRIORITY_NORMAL;
       const done = Boolean(raw.done);
-      let doneAt = done ? normalizeIso(raw.done_at || raw.doneAt, updated) : '';
+      const doneAt = done ? normalizeIso(raw.done_at || raw.doneAt, updated) : '';
       const notifiedAt = raw.notified_at ? normalizeIso(raw.notified_at, '') : '';
+      // 与 core.normalize_todo 完全一致：id 先定，parent_id 支持 parentId 别名并防御自引用
+      const todoId = String(raw.id || newId());
+      let parentId = normalizeParentId(raw.parent_id || raw.parentId);
+      if (parentId === todoId) parentId = '';
+      const estimateRaw =
+        raw.estimate_minutes === undefined || raw.estimate_minutes === null
+          ? raw.estimateMinutes
+          : raw.estimate_minutes;
 
       // 键按字母顺序排列，保证 canonical() 与 Python 端的 sort_keys 输出一致
       return {
         created_at: created,
         done: done,
         done_at: doneAt,
-        id: String(raw.id || newId()),
+        due_date: normalizeDueDate(raw.due_date || raw.dueDate),
+        estimate_minutes: normalizeEstimateMinutes(estimateRaw),
+        id: todoId,
         notified_at: notifiedAt,
+        parent_id: parentId,
         priority: priority,
         remind_at: normalizeRemindAt(raw.remind_at || raw.remind_time),
         remind_date: normalizeRemindDate(raw.remind_date || raw.remindDate),
@@ -384,7 +505,7 @@
           doc.tombstones.push({ deleted_at: deletedAt, id: id });
         });
       }
-      const version = parseInt(raw.version, 10);
+      const version = parseInt(raw.version || raw.rev, 10);
       doc.version = Number.isFinite(version) && version > 0 ? version : 0;
       doc.updated_at = normalizeIso(raw.updated_at, EPOCH_ISO);
       doc.todos.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -397,8 +518,11 @@
         created_at: todo.created_at,
         done: todo.done,
         done_at: todo.done_at,
+        due_date: todo.due_date,
+        estimate_minutes: todo.estimate_minutes,
         id: todo.id,
         notified_at: todo.notified_at,
+        parent_id: todo.parent_id,
         priority: todo.priority,
         remind_at: todo.remind_at,
         remind_date: todo.remind_date,
@@ -487,6 +611,9 @@
         updated_at: now,
         remind_at: fields.remind_at,
         remind_date: fields.remind_date,
+        due_date: fields.due_date,
+        parent_id: fields.parent_id,
+        estimate_minutes: fields.estimate_minutes,
         notified_at: '',
         done_at: '',
       });
@@ -513,6 +640,12 @@
         }
         if (patch.remind_at !== undefined) item.remind_at = normalizeRemindAt(patch.remind_at);
         if (patch.remind_date !== undefined) item.remind_date = normalizeRemindDate(patch.remind_date);
+        if (patch.due_date !== undefined) item.due_date = normalizeDueDate(patch.due_date);
+        if (patch.parent_id !== undefined) {
+          const parentId = normalizeParentId(patch.parent_id);
+          item.parent_id = parentId === item.id ? '' : parentId;
+        }
+        if (patch.estimate_minutes !== undefined) item.estimate_minutes = normalizeEstimateMinutes(patch.estimate_minutes);
         if (patch.done !== undefined) {
           const done = Boolean(patch.done);
           item.done = done;
@@ -619,6 +752,9 @@
       return day;
     }
     function todoDay(todo) {
+      // 与 core.todo_day 一致：有合法 due_date 时归属到目标日期
+      const due = parseDayText(todo && todo.due_date);
+      if (due) return due;
       const created = parseIso(todo && todo.created_at) || new Date();
       return targetDay(created);
     }
@@ -628,6 +764,19 @@
       if (diff === 0) return '今天';
       if (diff === 1) return '明天';
       return pad2(day.getMonth() + 1) + '-' + pad2(day.getDate());
+    }
+    // 目标完成日期标签：今天 / 明天 / MM-DD；未完成且已过期 → 逾期
+    // 基准日与 core.format_due_label 一致，用 currentDay（凌晨 2 点前算前一天）
+    function formatDueDate(todo, now) {
+      const due = parseDayText(todo && todo.due_date);
+      if (!due) return '';
+      const base = currentDay(now ? new Date(now) : new Date());
+      const diff = Math.round((due.getTime() - base.getTime()) / 86400000);
+      const short = pad2(due.getMonth() + 1) + '-' + pad2(due.getDate());
+      if (diff < 0) return todo && todo.done ? short : '逾期';
+      if (diff === 0) return '今天';
+      if (diff === 1) return '明天';
+      return short;
     }
     function inFillWindow(moment) {
       const now = moment ? new Date(moment) : new Date();
@@ -642,6 +791,275 @@
       return !normalizeDoc(doc).todos.some((item) => !item.done && todoDay(item).getTime() === stamp);
     }
 
+    // -------------------- 账本协议（独立 Gist：taskbar_ledger.json） --------------------
+    function todayText() {
+      return toIso(new Date()).slice(0, 10);
+    }
+    function currentDayText() {
+      return toIso(currentDay()).slice(0, 10);
+    }
+    function normalizeAmount(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number <= 0) return 0;
+      return Math.round(number * 100) / 100;
+    }
+
+    function normalizeLedgerEntry(raw) {
+      if (!raw || typeof raw !== 'object') return null;
+      const created = normalizeIso(raw.created_at || raw.createdAt, EPOCH_ISO);
+      const updated = normalizeIso(raw.updated_at || raw.updatedAt, created);
+      const typeRaw = String(raw.type || '').trim().toLowerCase();
+      // 与 core.normalize_ledger_entry 一致：日期非法/缺失时回落到 currentDay，
+      // 分类缺失保留空串（「其他」默认值只在新增账目时由 addLedgerEntry 兜底）。
+      // 键按字母顺序排列，与 Python canonical_ledger 的 sort_keys 对齐
+      return {
+        amount: normalizeAmount(raw.amount),
+        category: String(raw.category || '').trim(),
+        created_at: created,
+        date: normalizeDate(raw.date) || currentDayText(),
+        id: String(raw.id || newId('lg')),
+        note: String(raw.note || '').trim(),
+        type: typeRaw === LEDGER_INCOME ? LEDGER_INCOME : LEDGER_EXPENSE,
+        updated_at: updated,
+      };
+    }
+
+    function emptyLedger() {
+      return {
+        schema: LEDGER_SCHEMA_VERSION,
+        version: 0,
+        updated_at: EPOCH_ISO,
+        entries: [],
+        tombstones: [],
+      };
+    }
+
+    function normalizeLedger(raw) {
+      const ledger = emptyLedger();
+      if (!raw || typeof raw !== 'object') return ledger;
+      const seen = new Set();
+      if (Array.isArray(raw.entries)) {
+        raw.entries.forEach((entry) => {
+          const normalized = normalizeLedgerEntry(entry);
+          if (normalized && !seen.has(normalized.id)) {
+            seen.add(normalized.id);
+            ledger.entries.push(normalized);
+          }
+        });
+      }
+      const seenTomb = new Set();
+      if (Array.isArray(raw.tombstones)) {
+        raw.tombstones.forEach((entry) => {
+          if (!entry || typeof entry !== 'object' || !entry.id) return;
+          const id = String(entry.id);
+          if (seenTomb.has(id)) return;
+          const deletedAt = normalizeIso(entry.deleted_at, '');
+          if (!deletedAt) return;
+          seenTomb.add(id);
+          ledger.tombstones.push({ deleted_at: deletedAt, id: id });
+        });
+      }
+      const version = parseInt(raw.version || raw.rev, 10);
+      ledger.version = Number.isFinite(version) && version > 0 ? version : 0;
+      ledger.updated_at = normalizeIso(raw.updated_at, EPOCH_ISO);
+      const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      ledger.entries.sort(byId);
+      ledger.tombstones.sort(byId);
+      return ledger;
+    }
+
+    function canonicalAmountText(value) {
+      // Python json.dumps 的 float 一定带小数点（100.0 / 12.5），这里手工对齐
+      const amount = normalizeAmount(value);
+      return Number.isInteger(amount) ? amount.toFixed(1) : String(amount);
+    }
+    function canonicalLedgerItemText(entry) {
+      // 手写序列化：键序按字母序、金额按 Python float 风格，与 core.canonical_ledger 逐字节一致
+      return (
+        '{"amount":' + canonicalAmountText(entry.amount) +
+        ',"category":' + JSON.stringify(entry.category) +
+        ',"created_at":' + JSON.stringify(entry.created_at) +
+        ',"date":' + JSON.stringify(entry.date) +
+        ',"id":' + JSON.stringify(entry.id) +
+        ',"note":' + JSON.stringify(entry.note) +
+        ',"type":' + JSON.stringify(entry.type) +
+        ',"updated_at":' + JSON.stringify(entry.updated_at) + '}'
+      );
+    }
+    function canonicalLedger(doc) {
+      const normalized = normalizeLedger(doc);
+      const entries = normalized.entries.map(canonicalLedgerItemText).join(',');
+      const tombstones = normalized.tombstones
+        .map((item) => '{"deleted_at":' + JSON.stringify(item.deleted_at) + ',"id":' + JSON.stringify(item.id) + '}')
+        .join(',');
+      return '{"entries":[' + entries + '],"tombstones":[' + tombstones + ']}';
+    }
+    function ledgersEqual(left, right) {
+      return canonicalLedger(left) === canonicalLedger(right);
+    }
+
+    function mergeLedgers(local, remote) {
+      const left = normalizeLedger(local);
+      const right = normalizeLedger(remote);
+      const entries = new Map();
+      left.entries.forEach((item) => entries.set(item.id, item));
+      right.entries.forEach((item) => {
+        const current = entries.get(item.id);
+        if (!current || isoRank(item.updated_at) >= isoRank(current.updated_at)) {
+          entries.set(item.id, item);
+        }
+      });
+      const tombstones = new Map();
+      left.tombstones.forEach((item) => tombstones.set(item.id, item));
+      right.tombstones.forEach((item) => {
+        const current = tombstones.get(item.id);
+        if (!current || isoRank(item.deleted_at) > isoRank(current.deleted_at)) {
+          tombstones.set(item.id, item);
+        }
+      });
+      tombstones.forEach((tombstone, id) => {
+        const entry = entries.get(id);
+        if (!entry) return;
+        if (isoRank(tombstone.deleted_at) >= isoRank(entry.updated_at)) entries.delete(id);
+        else tombstones.delete(id);
+      });
+      const pruneBefore = Date.now() / 1000 - TOMBSTONE_TTL_DAYS * 86400;
+      const kept = Array.from(tombstones.values())
+        .filter((item) => isoRank(item.deleted_at) >= pruneBefore)
+        .sort((a, b) => isoRank(b.deleted_at) - isoRank(a.deleted_at))
+        .slice(0, MAX_TOMBSTONES);
+      const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      kept.sort(byId);
+      return {
+        schema: LEDGER_SCHEMA_VERSION,
+        version: Math.max(left.version, right.version) + 1,
+        updated_at: nowIso(),
+        entries: Array.from(entries.values()).sort(byId),
+        tombstones: kept,
+      };
+    }
+    function needsLedgerPush(local, remote) {
+      return canonicalLedger(mergeLedgers(local, remote)) !== canonicalLedger(remote);
+    }
+
+    function addLedgerEntry(ledger, fields) {
+      const normalized = normalizeLedger(ledger);
+      const now = nowIso();
+      const input = fields || {};
+      const entry = normalizeLedgerEntry({
+        id: input.id || newId('lg'),
+        date: input.date,
+        type: input.type,
+        amount: input.amount,
+        category: String(input.category || '').trim() || LEDGER_DEFAULT_CATEGORY,
+        note: input.note,
+        created_at: now,
+        updated_at: now,
+      });
+      if (!entry) return normalized;
+      const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      normalized.entries = normalized.entries.filter((item) => item.id !== entry.id);
+      normalized.tombstones = normalized.tombstones.filter((item) => item.id !== entry.id);
+      normalized.entries.push(entry);
+      normalized.entries.sort(byId);
+      normalized.version += 1;
+      normalized.updated_at = now;
+      return normalized;
+    }
+
+    function updateLedgerEntry(ledger, entryId, patch) {
+      const normalized = normalizeLedger(ledger);
+      const now = nowIso();
+      const input = patch || {};
+      normalized.entries.forEach((entry) => {
+        if (entry.id !== entryId) return;
+        if (input.date !== undefined) entry.date = normalizeDate(input.date) || entry.date;
+        if (input.type !== undefined) {
+          entry.type = String(input.type).trim().toLowerCase() === LEDGER_INCOME ? LEDGER_INCOME : LEDGER_EXPENSE;
+        }
+        if (input.amount !== undefined) entry.amount = normalizeAmount(input.amount);
+        // 与 core.update_ledger_entry 一致：允许把分类清空（显示为「未分类」）
+        if (input.category !== undefined) entry.category = String(input.category || '').trim();
+        if (input.note !== undefined) entry.note = String(input.note || '').trim();
+        entry.updated_at = now;
+      });
+      normalized.version += 1;
+      normalized.updated_at = now;
+      return normalized;
+    }
+
+    function deleteLedgerEntry(ledger, entryId) {
+      const normalized = normalizeLedger(ledger);
+      const now = nowIso();
+      normalized.entries = normalized.entries.filter((item) => item.id !== entryId);
+      normalized.tombstones = normalized.tombstones.filter((item) => item.id !== entryId);
+      normalized.tombstones.push({ deleted_at: now, id: entryId });
+      normalized.version += 1;
+      normalized.updated_at = now;
+      return normalized;
+    }
+
+    function dayValue(value) {
+      if (typeof value === 'string' && DATE_RE.test(value.trim())) {
+        const parsed = parseDayText(value.trim());
+        if (parsed) return parsed;
+      }
+      return dateOnly(value ? new Date(value) : new Date());
+    }
+    function startOfWeek(moment) {
+      const hasMoment = moment !== undefined && moment !== null && moment !== '';
+      const day = hasMoment ? dayValue(moment) : currentDay();
+      const weekDay = (day.getDay() + 6) % 7; // 周一 = 0
+      day.setDate(day.getDate() - weekDay);
+      return day;
+    }
+    function weekStartText(moment) {
+      return toIso(startOfWeek(moment)).slice(0, 10);
+    }
+    function ledgerWeekSummary(ledger, weekStart) {
+      const hasWeekStart = weekStart !== undefined && weekStart !== null && weekStart !== '';
+      // 传了 week_start 就用它（与 core.ledger_week_summary 一致）；没传按“本周一”算
+      const start = hasWeekStart ? dayValue(weekStart) : startOfWeek();
+      const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
+      const summary = {
+        income: 0,
+        expense: 0,
+        net: 0,
+        by_category: {},
+        entries: [],
+      };
+      normalizeLedger(ledger).entries.forEach((entry) => {
+        const day = parseDayText(entry.date);
+        if (!day || day.getTime() < start.getTime() || day.getTime() >= end.getTime()) return;
+        summary.entries.push(entry);
+        if (entry.type === LEDGER_INCOME) summary.income += entry.amount;
+        else summary.expense += entry.amount;
+        const bucket = summary.by_category[entry.category] || { income: 0, expense: 0 };
+        if (entry.type === LEDGER_INCOME) bucket.income += entry.amount;
+        else bucket.expense += entry.amount;
+        summary.by_category[entry.category] = bucket;
+      });
+      const round2 = (value) => Math.round(value * 100) / 100;
+      summary.income = round2(summary.income);
+      summary.expense = round2(summary.expense);
+      summary.net = round2(summary.income - summary.expense);
+      Object.keys(summary.by_category).forEach((key) => {
+        summary.by_category[key].income = round2(summary.by_category[key].income);
+        summary.by_category[key].expense = round2(summary.by_category[key].expense);
+      });
+      summary.entries.sort((a, b) => {
+        if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+        const rankDiff = isoRank(a.created_at) - isoRank(b.created_at);
+        if (rankDiff !== 0) return rankDiff;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
+      return summary;
+    }
+    function formatMoney(value) {
+      const number = Number(value);
+      return '¥' + (Number.isFinite(number) ? number.toFixed(2) : '0.00');
+    }
+
     const protocol = {
       SCHEMA_VERSION: SCHEMA_VERSION,
       GIST_FILENAME: GIST_FILENAME,
@@ -653,6 +1071,8 @@
       parseIso: parseIso,
       isoRank: isoRank,
       newId: newId,
+      normalizeDate: normalizeDate,
+      normalizeDueDate: normalizeDueDate,
       normalizeTodo: normalizeTodo,
       normalizeDoc: normalizeDoc,
       emptyDoc: emptyDoc,
@@ -672,8 +1092,30 @@
       targetDay: targetDay,
       todoDay: todoDay,
       dayText: dayText,
+      formatDueDate: formatDueDate,
       inFillWindow: inFillWindow,
       fillReminderNeeded: fillReminderNeeded,
+      LEDGER_SCHEMA_VERSION: LEDGER_SCHEMA_VERSION,
+      LEDGER_FILENAME: LEDGER_FILENAME,
+      LEDGER_INCOME: LEDGER_INCOME,
+      LEDGER_EXPENSE: LEDGER_EXPENSE,
+      LEDGER_DEFAULT_CATEGORY: LEDGER_DEFAULT_CATEGORY,
+      todayText: todayText,
+      currentDayText: currentDayText,
+      normalizeLedgerEntry: normalizeLedgerEntry,
+      normalizeLedger: normalizeLedger,
+      emptyLedger: emptyLedger,
+      canonicalLedger: canonicalLedger,
+      ledgersEqual: ledgersEqual,
+      mergeLedgers: mergeLedgers,
+      needsLedgerPush: needsLedgerPush,
+      addLedgerEntry: addLedgerEntry,
+      updateLedgerEntry: updateLedgerEntry,
+      deleteLedgerEntry: deleteLedgerEntry,
+      startOfWeek: startOfWeek,
+      weekStartText: weekStartText,
+      ledgerWeekSummary: ledgerWeekSummary,
+      formatMoney: formatMoney,
     };
 
     if (typeof window !== 'undefined') {
@@ -693,10 +1135,14 @@
     const STORAGE_ETAG = 'tbl.etag.v2';
     const STORAGE_REMOTE = 'tbl.remote.v2';
     const STORAGE_META = 'tbl.meta.v2';
+    const STORAGE_LEDGER = 'tbl.ledger.v1';
+    const STORAGE_LEDGER_ETAG = 'tbl.ledger.etag.v1';
+    const STORAGE_LEDGER_REMOTE = 'tbl.ledger.remote.v1';
+    const STORAGE_LEDGER_META = 'tbl.ledger.meta.v1';
     const SYNC_INTERVAL_MS = 60000;
 
     const state = {
-      config: { token: '', gistId: '' },
+      config: { token: '', gistId: '', ledgerGistId: '' },
       doc: emptyDoc(),
       etag: null,
       remoteDoc: null,
@@ -706,6 +1152,12 @@
       pendingSync: false,
       syncTimer: null,
       editingId: null,
+      ledger: emptyLedger(),
+      ledgerEtag: null,
+      ledgerRemote: null,
+      ledgerMeta: { dirty: false, lastSync: '', lastError: '' },
+      ledgerSyncing: false,
+      ledgerPendingSync: false,
     };
 
     const $ = (id) => document.getElementById(id);
@@ -737,6 +1189,24 @@
     function isConfigured() {
       return Boolean(state.config.token && state.config.gistId);
     }
+    function isLedgerConfigured() {
+      return Boolean(state.config.token && state.config.ledgerGistId);
+    }
+
+    function loadLedgerState() {
+      const savedLedger = readJson(STORAGE_LEDGER, null);
+      state.ledger = savedLedger && Array.isArray(savedLedger.entries) ? normalizeLedger(savedLedger) : emptyLedger();
+      state.ledgerEtag = localStorage.getItem(STORAGE_LEDGER_ETAG) || null;
+      state.ledgerRemote = readJson(STORAGE_LEDGER_REMOTE, null);
+      const meta = readJson(STORAGE_LEDGER_META, null);
+      if (meta && typeof meta === 'object') {
+        state.ledgerMeta = {
+          dirty: Boolean(meta.dirty),
+          lastSync: String(meta.lastSync || ''),
+          lastError: String(meta.lastError || ''),
+        };
+      }
+    }
 
     function loadState() {
       const savedConfig = readJson(STORAGE_CONFIG, null);
@@ -744,12 +1214,14 @@
         state.config = {
           token: String(savedConfig.token || ''),
           gistId: String(savedConfig.gistId || ''),
+          ledgerGistId: String(savedConfig.ledgerGistId || ''),
         };
       } else {
         // 兼容 v1 的 localStorage 键名
         state.config = {
           token: localStorage.getItem('gh_token') || '',
           gistId: localStorage.getItem('gh_gist_id') || '',
+          ledgerGistId: '',
         };
       }
       const savedDoc = readJson(STORAGE_DOC, null);
@@ -772,6 +1244,8 @@
       }
       $('ghToken').value = state.config.token;
       $('gistId').value = state.config.gistId;
+      $('ledgerGistId').value = state.config.ledgerGistId;
+      loadLedgerState();
     }
 
     function saveConfig() {
@@ -782,6 +1256,9 @@
     function saveDoc() {
       localStorage.setItem(STORAGE_DOC, JSON.stringify(state.doc));
     }
+    function saveLedger() {
+      localStorage.setItem(STORAGE_LEDGER, JSON.stringify(state.ledger));
+    }
     function saveMeta() {
       localStorage.setItem(STORAGE_META, JSON.stringify(state.meta));
       if (state.etag) localStorage.setItem(STORAGE_ETAG, state.etag);
@@ -789,9 +1266,20 @@
       if (state.remoteDoc) localStorage.setItem(STORAGE_REMOTE, JSON.stringify(state.remoteDoc));
       else localStorage.removeItem(STORAGE_REMOTE);
     }
+    function saveLedgerMeta() {
+      localStorage.setItem(STORAGE_LEDGER_META, JSON.stringify(state.ledgerMeta));
+      if (state.ledgerEtag) localStorage.setItem(STORAGE_LEDGER_ETAG, state.ledgerEtag);
+      else localStorage.removeItem(STORAGE_LEDGER_ETAG);
+      if (state.ledgerRemote) localStorage.setItem(STORAGE_LEDGER_REMOTE, JSON.stringify(state.ledgerRemote));
+      else localStorage.removeItem(STORAGE_LEDGER_REMOTE);
+    }
     function markDirty() {
       state.meta.dirty = true;
       saveMeta();
+    }
+    function markLedgerDirty() {
+      state.ledgerMeta.dirty = true;
+      saveLedgerMeta();
     }
 
     /* -------------------- GitHub API -------------------- */
@@ -953,6 +1441,135 @@
       syncDebounce = setTimeout(() => syncNow('本地改动'), delay || 900);
     }
 
+    /* -------------------- 账本 GitHub API（独立 Gist） -------------------- */
+    async function getLedgerRemote(etag) {
+      const headers = authHeaders(etag ? { 'If-None-Match': etag } : undefined);
+      const response = await fetch(apiUrl('/gists/' + state.config.ledgerGistId), { headers: headers });
+      if (response.status === 304) return { notModified: true };
+      if (!response.ok) throw apiError(response);
+      const payload = await response.json();
+      const file = payload.files && payload.files[LEDGER_FILENAME];
+      let parsed = {};
+      if (file) {
+        if (file.truncated) throw new Error('账本 Gist 文件被截断（超过 1MB），请清理数据');
+        try {
+          parsed = JSON.parse(file.content || '{}');
+        } catch (error) {
+          throw new Error('账本 Gist 中的 JSON 解析失败：' + error.message);
+        }
+      }
+      return { ledger: normalizeLedger(parsed), etag: response.headers.get('ETag') };
+    }
+    async function putLedgerRemote(ledger) {
+      const normalized = normalizeLedger(ledger);
+      const body = { files: {} };
+      body.files[LEDGER_FILENAME] = { content: JSON.stringify(normalized, null, 2) };
+      const response = await fetch(apiUrl('/gists/' + state.config.ledgerGistId), {
+        method: 'PATCH',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw apiError(response);
+      return { ledger: normalized, etag: response.headers.get('ETag') || null };
+    }
+    async function createLedgerGistRemote() {
+      const body = {
+        description: 'Win11 Taskbar Lyrics & Todo - Ledger Data',
+        public: false,
+        files: {},
+      };
+      body.files[LEDGER_FILENAME] = { content: JSON.stringify(normalizeLedger(state.ledger), null, 2) };
+      const response = await fetch(apiUrl('/gists'), {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw apiError(response);
+      const payload = await response.json();
+      if (!payload.id) throw new Error('创建账本 Gist 成功但响应中没有 id');
+      return payload.id;
+    }
+
+    function updateLedgerHint() {
+      const hint = $('ledgerSyncHint');
+      if (!hint) return;
+      if (!isLedgerConfigured()) {
+        hint.textContent = '账本只保存在本机（在配置面板填写账本 Gist ID 后可云同步）';
+        return;
+      }
+      if (state.ledgerMeta.lastError) {
+        hint.textContent = '账本上次同步失败：' + state.ledgerMeta.lastError;
+        return;
+      }
+      if (state.ledgerMeta.lastSync) {
+        const date = parseIso(state.ledgerMeta.lastSync);
+        hint.textContent =
+          '账本已同步' + (date ? ' ' + pad2(date.getHours()) + ':' + pad2(date.getMinutes()) : '') +
+          (state.ledgerMeta.dirty ? ' · 有改动待推送' : '');
+      } else {
+        hint.textContent = '账本等待同步…';
+      }
+    }
+
+    async function syncLedger(reason) {
+      if (!isLedgerConfigured()) return;
+      if (state.ledgerSyncing) {
+        state.ledgerPendingSync = true;
+        return;
+      }
+      state.ledgerSyncing = true;
+      try {
+        let remote = null;
+        const fetched = await getLedgerRemote(state.ledgerEtag);
+        if (fetched.notModified) {
+          remote = state.ledgerRemote ? normalizeLedger(state.ledgerRemote) : (await getLedgerRemote(null)).ledger;
+        } else {
+          remote = fetched.ledger;
+          state.ledgerEtag = fetched.etag;
+          state.ledgerRemote = remote;
+        }
+        let merged = mergeLedgers(state.ledger, remote);
+        const shouldPush = state.ledgerMeta.dirty || needsLedgerPush(merged, remote);
+        if (shouldPush) {
+          const result = await putLedgerRemote(merged);
+          merged = result.ledger;
+          state.ledgerEtag = result.etag;
+          state.ledgerRemote = merged;
+          state.ledgerMeta.dirty = false;
+        }
+        state.ledger = normalizeLedger(merged);
+        state.ledgerMeta.lastSync = nowIso();
+        state.ledgerMeta.lastError = '';
+        saveLedger();
+        saveLedgerMeta();
+        renderLedger();
+        if (reason && shouldPush) toast('📒 账本已同步');
+      } catch (error) {
+        state.ledgerMeta.lastError = error.message || String(error);
+        saveLedgerMeta();
+        updateLedgerHint();
+        toast('账本同步失败：' + state.ledgerMeta.lastError, true);
+      } finally {
+        state.ledgerSyncing = false;
+        updateLedgerHint();
+        if (state.ledgerPendingSync) {
+          state.ledgerPendingSync = false;
+          setTimeout(() => syncLedger('补同步'), 900);
+        }
+      }
+    }
+
+    let ledgerSyncDebounce = null;
+    function scheduleLedgerSync(delay) {
+      if (!isLedgerConfigured()) return;
+      clearTimeout(ledgerSyncDebounce);
+      ledgerSyncDebounce = setTimeout(() => syncLedger('账本改动'), delay || 900);
+    }
+    function syncAll(reason) {
+      if (isConfigured()) syncNow(reason);
+      if (isLedgerConfigured()) syncLedger(reason);
+    }
+
     /* -------------------- 本地变更 -------------------- */
     function applyDoc(newDoc, message) {
       state.doc = normalizeDoc(newDoc);
@@ -960,6 +1577,14 @@
       renderTodos();
       markDirty();
       scheduleSync(900);
+      if (message) toast(message);
+    }
+    function applyLedger(newLedger, message) {
+      state.ledger = normalizeLedger(newLedger);
+      saveLedger();
+      renderLedger();
+      markLedgerDirty();
+      scheduleLedgerSync(900);
       if (message) toast(message);
     }
 
@@ -985,10 +1610,12 @@
         priority: $('todoPriority').value,
         remind_at: timeValue || '',
         remind_date: remindDate,
+        due_date: $('todoDue').value || '',
       });
       input.value = '';
       $('todoTime').value = '';
       $('todoDate').value = '';
+      $('todoDue').value = '';
       applyDoc(next, '已添加，电脑端 30 秒内同步');
     }
 
@@ -1009,6 +1636,7 @@
       $('editText').value = item.text;
       $('editPriority').value = item.priority === protocol.PRIORITY_HIGH ? 'high' : 'normal';
       $('editTime').value = item.remind_at || '';
+      $('editDue').value = item.due_date || '';
       if (item.remind_date) {
         const today = toIso(new Date()).slice(0, 10);
         const tomorrowDate = new Date();
@@ -1047,6 +1675,7 @@
         priority: $('editPriority').value,
         remind_at: timeValue || '',
         remind_date: remindDate,
+        due_date: $('editDue').value || '',
       });
       closeEdit();
       applyDoc(next, '已保存修改');
@@ -1066,6 +1695,32 @@
       applyDoc(next, '已清除已完成待办');
     }
 
+    /* -------------------- 账本录入 -------------------- */
+    function addLedgerFromForm() {
+      const amountInput = $('ledgerAmount');
+      const amount = Number(amountInput.value);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        toast('请输入大于 0 的金额', true);
+        amountInput.focus();
+        return;
+      }
+      const dateValue = $('ledgerDate').value || protocol.todayText();
+      const category = $('ledgerCategory').value.trim() || protocol.LEDGER_DEFAULT_CATEGORY;
+      const next = protocol.addLedgerEntry(state.ledger, {
+        date: dateValue,
+        type: $('ledgerType').value,
+        amount: amount,
+        category: category,
+        note: $('ledgerNote').value.trim(),
+      });
+      amountInput.value = '';
+      $('ledgerNote').value = '';
+      applyLedger(next, '已记一笔');
+    }
+    function deleteLedgerById(entryId) {
+      applyLedger(protocol.deleteLedgerEntry(state.ledger, entryId), '已删除记账记录');
+    }
+
     /* -------------------- 渲染 -------------------- */
     function escapeHtml(value) {
       return String(value).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -1080,6 +1735,17 @@
       const list = $('todoList');
       if (!list) return;
       const todos = state.doc.todos;
+      const parentIdSet = new Set(todos.map((todo) => todo.id));
+      // 父任务进度 [done/total]：只统计真实存在的子任务
+      const childStats = new Map();
+      todos.forEach((item) => {
+        const parentId = item.parent_id || '';
+        if (!parentId || !parentIdSet.has(parentId)) return;
+        const stat = childStats.get(parentId) || { done: 0, total: 0 };
+        stat.total += 1;
+        if (item.done) stat.done += 1;
+        childStats.set(parentId, stat);
+      });
       const pendingCount = todos.filter((item) => !item.done).length;
       $('count-pending').textContent = String(pendingCount);
       $('count-all').textContent = String(todos.length);
@@ -1113,6 +1779,31 @@
         filtered.sort((a, b) => (order.get(a.id) || 0) - (order.get(b.id) || 0));
       }
 
+      // 子任务缩进展示：把子任务插到父任务后面，保持其余条目的相对顺序
+      const visible = new Map(filtered.map((item) => [item.id, item]));
+      const childrenOf = new Map();
+      const roots = [];
+      filtered.forEach((item) => {
+        const parentId = item.parent_id && visible.has(item.parent_id) ? item.parent_id : '';
+        if (!parentId) {
+          roots.push(item);
+          return;
+        }
+        const bucket = childrenOf.get(parentId) || [];
+        bucket.push(item);
+        childrenOf.set(parentId, bucket);
+      });
+      const groupSeen = new Set();
+      const grouped = [];
+      const visit = (item) => {
+        if (groupSeen.has(item.id)) return;
+        groupSeen.add(item.id);
+        grouped.push(item);
+        (childrenOf.get(item.id) || []).forEach(visit);
+      };
+      roots.forEach(visit);
+      filtered = grouped;
+
       if (!filtered.length) {
         const emptyText = state.filter === 'pending' ? '暂无待办，添加一条试试 ✨' : state.filter === 'done' ? '还没有已完成的待办' : '还没有任何待办';
         list.innerHTML = '<div class="empty">' + emptyText + '</div>';
@@ -1126,15 +1817,26 @@
           const high = item.priority === protocol.PRIORITY_HIGH;
           const remindLabel = protocol.formatReminder(item, now);
           const isOverdue = remindLabel && protocol.dueReminder(item, now);
+          const isSubtask = Boolean(item.parent_id) && parentIdSet.has(item.parent_id);
+          const progress = childStats.get(item.id);
+          const dueLabel = protocol.formatDueDate(item, now);
           const metaParts = [];
           metaParts.push('<span class="badge ' + (high ? 'high' : 'normal') + '">' + (high ? '🔥 紧急' : '待办') + '</span>');
-          if (!item.done) {
+          if (progress && progress.total) {
+            metaParts.push('<span class="badge progress">📁 [' + progress.done + '/' + progress.total + ']</span>');
+          }
+          if (dueLabel) {
+            metaParts.push('<span class="badge due' + (dueLabel === '逾期' ? ' overdue' : '') + '">📅 ' + escapeHtml(dueLabel) + '</span>');
+          } else if (!item.done) {
             const itemDay = protocol.todoDay(item);
             if (itemDay.getTime() > todayDay.getTime()) {
               metaParts.push('<span>📅 ' + escapeHtml(protocol.dayText(itemDay, todayDay)) + '</span>');
             } else if (itemDay.getTime() < todayDay.getTime()) {
               metaParts.push('<span class="remind overdue">⏳ 逾期</span>');
             }
+          }
+          if (item.estimate_minutes) {
+            metaParts.push('<span>⏱ ' + escapeHtml(String(item.estimate_minutes)) + ' 分钟</span>');
           }
           if (remindLabel) {
             metaParts.push('<span class="remind' + (isOverdue ? ' overdue' : '') + '">⏰ ' + escapeHtml(remindLabel) + (item.notified_at ? ' · 已提醒' : '') + '</span>');
@@ -1145,7 +1847,7 @@
             metaParts.push('<span>✅ ' + escapeHtml(formatDoneAt(item.done_at)) + '</span>');
           }
           return (
-            '<article class="todo-item' + (item.done ? ' done' : '') + (isOverdue && !item.done ? ' alerting' : '') + '" data-id="' + escapeHtml(item.id) + '">' +
+            '<article class="todo-item' + (item.done ? ' done' : '') + (isOverdue && !item.done ? ' alerting' : '') + (isSubtask ? ' subtask' : '') + '" data-id="' + escapeHtml(item.id) + '">' +
               '<button class="checkbox" type="button" data-action="toggle" data-id="' + escapeHtml(item.id) + '" aria-label="切换完成状态">' + (item.done ? '✓' : '') + '</button>' +
               '<div class="todo-content">' +
                 '<div class="todo-title">' + escapeHtml(item.text) + '</div>' +
@@ -1162,12 +1864,54 @@
       updateSyncDetail();
     }
 
+    function renderLedger() {
+      const summaryBox = $('ledgerSummary');
+      const listBox = $('ledgerList');
+      if (!summaryBox || !listBox) return;
+      updateLedgerHint();
+      const summary = protocol.ledgerWeekSummary(state.ledger);
+      const money = (value) => escapeHtml(protocol.formatMoney(value));
+      summaryBox.innerHTML =
+        '<div class="summary-box income"><span>本周收入</span><b>' + money(summary.income) + '</b></div>' +
+        '<div class="summary-box expense"><span>本周支出</span><b>' + money(summary.expense) + '</b></div>' +
+        '<div class="summary-box net"><span>本周结余</span><b>' + money(summary.net) + '</b></div>';
+      if (!summary.entries.length) {
+        listBox.innerHTML = '<div class="ledger-empty">本周还没有记账，先记一笔吧 🧾</div>';
+        return;
+      }
+      listBox.innerHTML = summary.entries
+        .map((entry) => {
+          const income = entry.type === protocol.LEDGER_INCOME;
+          const sign = income ? '+' : '-';
+          const meta = [entry.date];
+          if (entry.note) meta.push(entry.note);
+          return (
+            '<div class="ledger-item ' + (income ? 'income' : 'expense') + '" data-ledger-id="' + escapeHtml(entry.id) + '">' +
+              '<div class="info">' +
+                '<div class="cat">' + escapeHtml(entry.category || '未分类') + '</div>' +
+                '<div class="sub">' + escapeHtml(meta.join(' · ')) + '</div>' +
+              '</div>' +
+              '<div class="amt">' + sign + escapeHtml(protocol.formatMoney(entry.amount)) + '</div>' +
+              '<button class="icon-btn" type="button" data-ledger-action="delete" data-id="' + escapeHtml(entry.id) + '" aria-label="删除这笔">✕</button>' +
+            '</div>'
+          );
+        })
+        .join('');
+    }
+
     function setFilter(filter) {
       state.filter = filter;
       document.querySelectorAll('.tab').forEach((element) => {
         element.classList.toggle('active', element.dataset.filter === filter);
       });
-      renderTodos();
+      const ledgerMode = filter === 'ledger';
+      document.querySelectorAll('.todo-only').forEach((element) => {
+        element.classList.toggle('hidden', ledgerMode);
+      });
+      const ledgerPanel = $('ledgerPanel');
+      if (ledgerPanel) ledgerPanel.classList.toggle('hidden', !ledgerMode);
+      if (ledgerMode) renderLedger();
+      else renderTodos();
     }
 
     function toggleConfigPanel(force) {
@@ -1183,12 +1927,18 @@
       $('saveConfigBtn').addEventListener('click', async () => {
         state.config.token = $('ghToken').value.trim();
         state.config.gistId = $('gistId').value.trim();
+        state.config.ledgerGistId = $('ledgerGistId').value.trim();
         saveConfig();
         toggleConfigPanel(false);
+        if (isLedgerConfigured()) {
+          state.ledgerEtag = null;
+          state.ledgerRemote = null;
+          await syncLedger('保存配置');
+        }
         if (!isConfigured()) {
           setStatus('idle', '未配置');
           updateSyncDetail();
-          toast('已保存配置（尚未填写完整，暂不同步）');
+          toast('已保存配置（待办同步尚未填写完整；账本按配置单独同步）');
           return;
         }
         state.etag = null;
@@ -1220,7 +1970,46 @@
           toast(error.message, true);
         }
       });
-      $('syncNowBtn').addEventListener('click', () => syncNow('手动'));
+      $('syncNowBtn').addEventListener('click', () => syncAll('手动'));
+      $('createLedgerGistBtn').addEventListener('click', async () => {
+        const token = $('ghToken').value.trim();
+        if (!token) {
+          toast('请先填写 GitHub Token', true);
+          return;
+        }
+        if ($('ledgerGistId').value.trim()) {
+          if (!confirm('当前已填写账本 Gist ID，仍要创建一个新的账本 Gist 吗？创建后需要换用新 ID。')) return;
+        }
+        try {
+          toggleConfigPanel(false);
+          state.config.token = token;
+          const gistId = await createLedgerGistRemote();
+          state.config.ledgerGistId = gistId;
+          saveConfig();
+          $('ledgerGistId').value = gistId;
+          $('ghToken').value = token;
+          state.ledgerEtag = null;
+          state.ledgerRemote = null;
+          toast('账本 Gist 创建成功，ID 已填好');
+          await syncLedger('创建账本');
+        } catch (error) {
+          toast(error.message, true);
+        }
+      });
+      $('addLedgerBtn').addEventListener('click', addLedgerFromForm);
+      $('ledgerAmount').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') addLedgerFromForm();
+      });
+      $('ledgerNote').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') addLedgerFromForm();
+      });
+      $('ledgerList').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-ledger-action]');
+        if (!button) return;
+        if (button.dataset.ledgerAction === 'delete') {
+          if (confirm('删除这笔记账记录？')) deleteLedgerById(button.dataset.id);
+        }
+      });
       $('addBtn').addEventListener('click', addTodoFromForm);
       $('todoInput').addEventListener('keydown', (event) => {
         if (event.key === 'Enter') addTodoFromForm();
@@ -1247,14 +2036,10 @@
         if (event.target === $('editModal')) closeEdit();
       });
       document.addEventListener('visibilitychange', () => {
-        if (!document.hidden && isConfigured()) syncNow('回到前台');
+        if (!document.hidden) syncAll('回到前台');
       });
-      window.addEventListener('focus', () => {
-        if (isConfigured()) syncNow('窗口聚焦');
-      });
-      window.addEventListener('online', () => {
-        if (isConfigured()) syncNow('网络恢复');
-      });
+      window.addEventListener('focus', () => syncAll('窗口聚焦'));
+      window.addEventListener('online', () => syncAll('网络恢复'));
     }
 
     function registerServiceWorker() {
@@ -1269,7 +2054,9 @@
     function initApp() {
       loadState();
       bindEvents();
+      $('ledgerDate').value = protocol.todayText();
       renderTodos();
+      renderLedger();
       if (isConfigured()) {
         setStatus('busy', '连接中…');
         syncNow('启动');
@@ -1277,12 +2064,18 @@
         setStatus('idle', '未配置');
         toggleConfigPanel(true);
       }
+      if (isLedgerConfigured()) syncLedger('启动');
       // 定时同步始终注册：用户中途才配置 Gist 也能自动同步
       setInterval(() => {
-        if (!document.hidden && isConfigured()) syncNow('定时');
+        if (document.hidden) return;
+        if (isConfigured()) syncNow('定时');
+        if (isLedgerConfigured()) syncLedger('定时');
       }, SYNC_INTERVAL_MS);
       // 每分钟刷新一次“该填明天待办”的提示（只重绘，不发请求）
-      setInterval(renderTodos, 60000);
+      setInterval(() => {
+        renderTodos();
+        renderLedger();
+      }, 60000);
       registerServiceWorker();
     }
   })();
