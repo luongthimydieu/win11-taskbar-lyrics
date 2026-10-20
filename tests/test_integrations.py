@@ -320,6 +320,16 @@ class PlanComplexTaskTests(unittest.TestCase):
         self.assertIn("3–5 个", system_prompt)
         self.assertIn("只在周一至周五", system_prompt)
 
+    def test_plan_context_text_in_prompt(self):
+        _plan, session = self._plan(
+            plan_json(),
+            horizon_days=14,
+            options={"context_text": "已完成：A；未完成：B；请压缩到一周内"},
+        )
+        body = session.post.call_args[1]["json"]
+        self.assertIn("已完成：A", body["messages"][0]["content"])
+        self.assertIn("已完成：A", body["messages"][1]["content"])
+
     def test_plan_estimate_coercion(self):
         data = json.loads(plan_json())
         data["steps"][0]["estimate_minutes"] = "45"

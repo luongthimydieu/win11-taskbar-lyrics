@@ -108,7 +108,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.3.7"
+APP_VERSION = "1.3.8"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -1758,35 +1758,57 @@ class AiPlanDialog(QDialog):
         idle_at: Optional["datetime.datetime"] = None,
         default_horizon: int = 14,
         default_granularity: str = "standard",
+        replan_parent: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__(parent)
+        self.replan_parent = dict(replan_parent or {})
+        self.replan_mode = bool(self.replan_parent)
         long_term = int(default_horizon) >= 21
-        self.setWindowTitle(
-            "⏳ AI 任务排队（高峰时段）"
-            if queue_mode
-            else ("📅 长期任务规划（AI 排期）" if long_term else "🤖 AI 拆解复杂任务")
-        )
+        if self.replan_mode:
+            title = "🔄 更新任务规划（AI 重排）" if not queue_mode else "⏳ 更新规划排队（高峰时段）"
+        else:
+            title = (
+                "⏳ AI 任务排队（高峰时段）"
+                if queue_mode
+                else ("📅 长期任务规划（AI 排期）" if long_term else "🤖 AI 拆解复杂任务")
+            )
+        self.setWindowTitle(title)
         self.setModal(True)
-        self.resize(700, 620)
+        self.resize(700, 640)
         self._config = dict(config)
         self._plan: Optional[Dict[str, Any]] = None
         self.queue_mode = bool(queue_mode)
         self.queued = False
 
         layout = QVBoxLayout(self)
-        intro = QLabel(
-            "📅 长期任务：描述目标 + 选好期限/每天投入/粒度，AI 会拆成多天可执行的子任务；"
-            "高峰时段只排队，空闲后自动生成并加入待办。"
-        )
+        if self.replan_mode:
+            done_titles = self.replan_parent.get("done_titles") or []
+            pending_titles = self.replan_parent.get("incomplete_titles") or []
+            intro_text = (
+                f"🔄 更新「{self.replan_parent.get('parent_text') or '长期任务'}」的规划：\n"
+                f"已完成 {len(done_titles)} 步、未完成 {len(pending_titles)} 步。"
+                "AI 会保留已完成的子任务，替换未完成的子任务；已完成记录不会丢。"
+            )
+        else:
+            intro_text = (
+                "📅 长期任务：描述目标 + 选好期限/每天投入/粒度，AI 会拆成多天可执行的子任务；"
+                "高峰时段只排队，空闲后自动生成并加入待办。"
+            )
+        intro = QLabel(intro_text)
         intro.setWordWrap(True)
         intro.setStyleSheet("color:#94a3b8;font-size:12px;")
         layout.addWidget(intro)
         form = QFormLayout()
         self.task_edit = QLineEdit()
-        self.task_edit.setPlaceholderText(
-            "例如：3 周内完成数学建模竞赛（选题、数据、建模、论文、答辩），每天 2 小时"
-        )
-        form.addRow("长期任务", self.task_edit)
+        if self.replan_mode:
+            self.task_edit.setPlaceholderText(
+                "更新要求（可空）：例如“进度落后了，剩余步骤压缩到 10 天内，每天只有 1 小时”"
+            )
+        else:
+            self.task_edit.setPlaceholderText(
+                "例如：3 周内完成数学建模竞赛（选题、数据、建模、论文、答辩），每天 2 小时"
+            )
+        form.addRow("更新要求" if self.replan_mode else "长期任务", self.task_edit)
         self.horizon_spin = QSpinBox()
         self.horizon_spin.setRange(3, 120)
         self.horizon_spin.setValue(max(3, min(120, int(default_horizon))))
@@ -1855,8 +1877,8 @@ class AiPlanDialog(QDialog):
             self.add_btn.clicked.connect(self._on_add)
 
     def _enqueue(self) -> None:
-        if not self.task_edit.text().strip():
-            QMessageBox.warning(self, "内容为空", "请输入复杂任务描述。")
+        if not self.task_text().strip():
+            QMessageBox.warning(self, "内容为空", "请输入任务或更新要求。")
             return
         self.queued = True
         self.accept()
@@ -1866,9 +1888,9 @@ class AiPlanDialog(QDialog):
         if not cfg.get("ai_enabled", True) or not cfg.get("ai_api_key"):
             QMessageBox.warning(self, "AI 未配置", "请先在「高级设置 → AI」里填写 API Key。")
             return
-        text = self.task_edit.text().strip()
+        text = self.task_text().strip()
         if not text:
-            QMessageBox.warning(self, "内容为空", "请输入复杂任务描述。")
+            QMessageBox.warning(self, "内容为空", "请输入任务描述。")
             return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
@@ -1911,17 +1933,41 @@ class AiPlanDialog(QDialog):
         return self._plan
 
     def task_text(self) -> str:
+        if self.replan_mode:
+            parent_text = str(self.replan_parent.get("parent_text") or "长期任务")
+            update = self.task_edit.text().strip()
+            return f"{parent_text}（更新规划：{update}）" if update else f"{parent_text}（更新规划）"
         return self.task_edit.text().strip()
+
+    def replan_context(self) -> str:
+        if not self.replan_mode:
+            return ""
+        done_titles = self.replan_parent.get("done_titles") or []
+        pending_titles = self.replan_parent.get("incomplete_titles") or []
+        due = str(self.replan_parent.get("due_date") or "")
+        return (
+            f"任务：{self.replan_parent.get('parent_text') or '长期任务'}\n"
+            f"原计划完成日期：{due or '未指定'}\n"
+            f"已完成（保留）：{('、'.join(done_titles[:10]) or '无')}\n"
+            f"未完成（可调整/替换）：{('、'.join(pending_titles[:10]) or '无')}\n"
+            f"用户更新要求：{self.task_edit.text().strip() or '根据进度重新安排剩余步骤'}"
+        )
+
+    def is_replan(self) -> bool:
+        return self.replan_mode
 
     def horizon_days(self) -> int:
         return int(self.horizon_spin.value())
 
     def options(self) -> Dict[str, Any]:
-        return {
+        options = {
             "daily_minutes": int(self.daily_combo.currentData() or 0),
             "granularity": str(self.granularity_combo.currentData() or "standard"),
             "allow_weekends": bool(self.weekend_combo.currentData()),
         }
+        if self.replan_mode:
+            options["context_text"] = self.replan_context()
+        return options
 
     def is_queued(self) -> bool:
         return self.queued
@@ -3490,6 +3536,14 @@ class TaskbarWidget(QWidget):
 
         quick_menu = menu.addMenu("➕ 待办 / 记账 / 周报 / 记忆")
         quick_menu.addAction("📅 长期任务规划（AI 排期）…", self.long_term_plan_dialog)
+        parents = self._plan_parents()
+        if parents:
+            update_menu = quick_menu.addMenu("🔄 更新任务规划（AI 重排）…")
+            for info in parents[:10]:
+                update_menu.addAction(
+                    f"🔄 {str(info['parent_text'])[:18]}（{info['done_count']}/{info['total']}）",
+                    lambda _checked=False, pid=info["parent_id"]: self.update_plan_dialog(pid),
+                )
         quick_menu.addAction("➕ 添加待办…", self.add_todo_dialog)
         quick_menu.addAction("🤖 AI 拆解复杂任务…", self.ai_plan_dialog)
         if self.ai_queue:
@@ -3840,6 +3894,126 @@ class TaskbarWidget(QWidget):
         """「长期任务」按钮：默认 1 个月、详细粒度、工作日安排的 AI 排期。"""
         self.ai_plan_dialog(default_horizon=30, default_granularity="detailed")
 
+    def _plan_parents(self) -> List[Dict[str, Any]]:
+        """列出带子任务的未完成父任务，供「更新规划」选择。"""
+        todos = self.doc.get("todos", [])
+        parents: List[Dict[str, Any]] = []
+        for todo in todos:
+            if todo.get("parent_id") or todo.get("done"):
+                continue
+            children = [child for child in todos if child.get("parent_id") == todo.get("id")]
+            if not children:
+                continue
+            done_titles = [str(child.get("text") or "") for child in children if child.get("done")]
+            pending = [child for child in children if not child.get("done")]
+            parents.append(
+                {
+                    "parent_id": todo.get("id"),
+                    "parent_text": str(todo.get("text") or ""),
+                    "due_date": str(todo.get("due_date") or ""),
+                    "total": len(children),
+                    "done_count": len(done_titles),
+                    "done_titles": done_titles,
+                    "incomplete_titles": [str(child.get("text") or "") for child in pending],
+                }
+            )
+        return parents
+
+    def update_plan_dialog(self, parent_id: str) -> None:
+        """更新一个长期任务的规划：保留已完成子任务，AI 重排未完成部分。"""
+        info = next(
+            (item for item in self._plan_parents() if item["parent_id"] == parent_id), None
+        )
+        if info is None:
+            QMessageBox.information(self, "没有可更新的规划", "这个任务没有未完成的子任务。")
+            return
+        if not str(self.config.get("ai_api_key", "")).strip():
+            answer = QMessageBox.question(
+                self, "AI 未配置", "更新规划需要 AI API Key，是否现在打开设置？"
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self.open_advanced_settings()
+            return
+        remaining = 14
+        try:
+            due = core.parse_iso(info.get("due_date") or "")
+            if due:
+                remaining = max(3, (due.date() - core.current_day()).days)
+        except Exception:  # noqa: BLE001
+            remaining = 14
+        remaining = max(3, min(120, remaining))
+        if not self._ai_idle_ok():
+            dialog = AiPlanDialog(
+                self,
+                self.config,
+                queue_mode=True,
+                idle_at=self.ai_calendar.next_idle_start(),
+                default_horizon=remaining,
+                default_granularity="standard",
+                replan_parent=info,
+            )
+            if dialog.exec() == QDialog.DialogCode.Accepted and dialog.is_queued():
+                self._enqueue_ai_task(
+                    dialog.task_text(),
+                    dialog.horizon_days(),
+                    dialog.options(),
+                    mode="replan",
+                    parent_id=parent_id,
+                    context_text=dialog.replan_context(),
+                )
+            return
+        dialog = AiPlanDialog(
+            self,
+            self.config,
+            default_horizon=remaining,
+            default_granularity="standard",
+            replan_parent=info,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        plan = dialog.plan() or {}
+        if not (plan.get("steps") or []):
+            QMessageBox.warning(self, "没有拆解结果", "AI 没有返回可用的子任务。")
+            return
+        count = self._apply_ai_replan(parent_id, plan)
+        self._notify("任务规划已更新", f"已用新计划替换未完成子任务（{count} 步）")
+
+    def _apply_ai_replan(self, parent_id: str, plan: Dict[str, Any]) -> int:
+        parent = next((todo for todo in self.doc["todos"] if todo["id"] == parent_id), None)
+        if parent is None:
+            return 0
+        steps = plan.get("steps") or []
+        if not steps:
+            return 0
+        for child in [
+            todo for todo in self.doc["todos"]
+            if todo.get("parent_id") == parent_id and not todo.get("done")
+        ]:
+            self.doc = core.delete_todo(self.doc, str(child["id"]))
+        last_due = ""
+        for step in steps:
+            last_due = str(step.get("due_date") or last_due)
+            self.doc, _child = core.add_todo(
+                self.doc,
+                str(step.get("text") or "").strip(),
+                due_date=str(step.get("due_date") or ""),
+                parent_id=parent_id,
+                estimate_minutes=int(step.get("estimate_minutes") or 0),
+            )
+        total_minutes = sum(int(step.get("estimate_minutes") or 0) for step in steps)
+        try:
+            self.doc = core.update_todo(
+                self.doc,
+                parent_id,
+                due_date=last_due,
+                estimate_minutes=total_minutes,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        self._persist_and_sync()
+        self.refresh_texts()
+        return len(steps)
+
     def _apply_ai_plan(self, plan: Dict[str, Any], default_title: str = "复杂任务") -> int:
         steps = plan.get("steps") or []
         if not steps:
@@ -3890,7 +4064,15 @@ class TaskbarWidget(QWidget):
         except OSError as exc:
             LOGGER.warning("保存 AI 排队失败：%s", exc)
 
-    def _enqueue_ai_task(self, text: str, horizon_days: int, options: Any = None) -> None:
+    def _enqueue_ai_task(
+        self,
+        text: str,
+        horizon_days: int,
+        options: Any = None,
+        mode: str = "create",
+        parent_id: str = "",
+        context_text: str = "",
+    ) -> None:
         text = str(text or "").strip()
         if not text:
             return
@@ -3899,6 +4081,9 @@ class TaskbarWidget(QWidget):
             "text": text,
             "horizon_days": int(horizon_days or 14),
             "options": dict(options or {}),
+            "mode": str(mode or "create"),
+            "parent_id": str(parent_id or ""),
+            "context_text": str(context_text or ""),
             "created_at": datetime.datetime.now(ai_schedule.BEIJING_TZ).isoformat(timespec="seconds"),
             "attempts": 0,
         }
@@ -3933,14 +4118,25 @@ class TaskbarWidget(QWidget):
             try:
                 import ai_client
 
+                options = dict(item.get("options") or {})
+                if item.get("context_text"):
+                    options["context_text"] = str(item.get("context_text"))
                 plan = ai_client.plan_complex_task(
                     client,
                     str(item.get("text") or ""),
                     core.current_day(),
                     horizon_days=int(item.get("horizon_days") or 14),
-                    options=item.get("options") or {},
+                    options=options,
                 )
-                self.bridge.ai_queue_result.emit({"ok": True, "id": item.get("id"), "plan": plan})
+                self.bridge.ai_queue_result.emit(
+                    {
+                        "ok": True,
+                        "id": item.get("id"),
+                        "mode": item.get("mode") or "create",
+                        "parent_id": item.get("parent_id") or "",
+                        "plan": plan,
+                    }
+                )
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("AI 排队任务执行失败")
                 self.bridge.ai_queue_result.emit(
@@ -3955,6 +4151,15 @@ class TaskbarWidget(QWidget):
         item = next((entry for entry in self.ai_queue if entry.get("id") == queue_id), None)
         if result.get("ok"):
             plan = result.get("plan") or {}
+            mode = str(result.get("mode") or (item or {}).get("mode") or "create")
+            if mode == "replan":
+                parent_id = str(result.get("parent_id") or (item or {}).get("parent_id") or "")
+                count = self._apply_ai_replan(parent_id, plan)
+                title = str((item or {}).get("text") or "长期任务")
+                self.ai_queue = [entry for entry in self.ai_queue if entry.get("id") != queue_id]
+                self._save_ai_queue()
+                self._notify("任务规划已更新", f"《{title}》已替换未完成子任务（{count} 步）")
+                return
             title = str(plan.get("title") or (item or {}).get("text") or "复杂任务")
             count = self._apply_ai_plan(plan, default_title=title)
             self.ai_queue = [entry for entry in self.ai_queue if entry.get("id") != queue_id]
@@ -4402,6 +4607,14 @@ class TaskbarWidget(QWidget):
         tray_menu.addAction("显示 / 隐藏", self.toggle_visibility)
         tray_quick = tray_menu.addMenu("➕ 待办 / 记账 / 周报")
         tray_quick.addAction("📅 长期任务规划（AI 排期）…", self.long_term_plan_dialog)
+        parents = self._plan_parents()
+        if parents:
+            tray_update = tray_quick.addMenu("🔄 更新任务规划…")
+            for info in parents[:8]:
+                tray_update.addAction(
+                    f"🔄 {str(info['parent_text'])[:16]}（{info['done_count']}/{info['total']}）",
+                    lambda _checked=False, pid=info["parent_id"]: self.update_plan_dialog(pid),
+                )
         tray_quick.addAction("➕ 添加待办…", self.add_todo_dialog)
         tray_quick.addAction("🤖 AI 拆解复杂任务…", self.ai_plan_dialog)
         tray_quick.addAction("💰 记一笔…", self.ledger_dialog)

@@ -336,6 +336,9 @@ def plan_complex_task(
     ]
     if not allow_weekends:
         extra_lines.append("   - 所有 due_date 必须是周一到周五；若原日期落在周末，顺延到下一个工作日")
+    context_text = str(opts.get("context_text") or "").strip()[:3000]
+    if context_text:
+        extra_lines.append("   - 当前进度 / 更新要求：\n" + context_text)
 
     system = _PLAN_SYSTEM_TEMPLATE.format(
         start=start.isoformat(), end=end.isoformat(), extra="\n".join(extra_lines)
@@ -347,6 +350,7 @@ def plan_complex_task(
             "content": (
                 f"今天的日期是 {start.isoformat()}。请规划这个任务：{task}\n"
                 f"偏好：{extra_lines[0]}；{extra_lines[1]}；{extra_lines[2]}。"
+                + (f"\n当前进度/更新要求：{context_text}" if context_text else "")
             ),
         },
     ]
