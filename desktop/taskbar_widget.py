@@ -108,7 +108,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.3.8"
+APP_VERSION = "2.0.0"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
