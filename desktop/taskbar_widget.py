@@ -104,7 +104,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -131,7 +131,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "ai_enabled": True,
     "ai_base_url": "https://api.deepseek.com",
     "ai_api_key": "",
-    "ai_model": "deepseek-chat",
+    "ai_model": "deepseek-flash",
     "mail_host": "smtp.gmail.com",
     "mail_port": 465,
     "mail_user": "",
@@ -142,12 +142,17 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "memory_repo": "luongthimydieu/taskbar-memory",
     "memory_token": "",
     "memory_branch": "main",
-    "memory_time": "23:30",
+    "memory_time": "04:00",
     "weekly_report_enabled": True,
     "weekly_report_weekday": 7,   # ISO：7=周日
     "weekly_report_time": "21:00",
     "last_memory_date": "",
     "last_report_week": "",
+    # AI 只在空闲时调用（系统无键鼠输入 ≥ N 分钟，或处于安静时段）
+    "ai_idle_only": True,
+    "ai_idle_minutes": 5,
+    "ai_idle_start": "00:30",
+    "ai_idle_end": "08:30",
     "offset_ratio": 0.0,       # 0=自动；拖拽后保存为相对任务栏宽度的比例
     "auto_anchor": True,       # True=自动贴到托盘区左侧的空位
     "width": DEFAULT_WIDTH,
@@ -375,6 +380,39 @@ def _hhmm_reached(now: "datetime.datetime", value: str) -> bool:
 
 def _week_start(moment: "datetime.date") -> "datetime.date":
     return moment - datetime.timedelta(days=moment.weekday())
+
+
+def _in_time_window(now: "datetime.datetime", start: str, end: str) -> bool:
+    """判断 now 是否处于 [start, end) 时段，支持跨午夜（如 23:00–07:00）。"""
+    try:
+        sh, sm = [int(part) for part in str(start).strip().split(":", 1)]
+        eh, em = [int(part) for part in str(end).strip().split(":", 1)]
+    except (TypeError, ValueError):
+        return False
+    minutes = now.hour * 60 + now.minute
+    start_min = sh * 60 + sm
+    end_min = eh * 60 + em
+    if start_min <= end_min:
+        return start_min <= minutes < end_min
+    return minutes >= start_min or minutes < end_min
+
+
+def _system_idle_seconds() -> float:
+    """Windows 下距离最后一次键盘/鼠标输入的秒数。"""
+    try:
+        class _LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+        info = _LASTINPUTINFO()
+        info.cbSize = ctypes.sizeof(info)
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if not user32.GetLastInputInfo(ctypes.byref(info)):
+            return 0.0
+        ticks = kernel32.GetTickCount()
+        return max(0.0, (ticks - info.dwTime) / 1000.0)
+    except Exception:  # noqa: BLE001
+        return 0.0
 
 
 def acquire_single_instance() -> bool:
@@ -1405,6 +1443,29 @@ class AdvancedSettingsDialog(QDialog):
         ai_form.addRow("API Base URL", self.ai_base)
         ai_form.addRow("Model", self.ai_model)
         ai_form.addRow("API Key", self.ai_key)
+        model_hint = QLabel(
+            "本机 API 可用模型：deepseek-flash（快速/低成本，适合定时任务）、deepseek-v4-pro（更强）。"
+            "定时记忆/周报的 AI 评价会优先使用 flash；若使用 Gemini Flash 等其它服务，请改 Base URL 和 Model。"
+        )
+        model_hint.setWordWrap(True)
+        model_hint.setStyleSheet("color:#64748b;font-size:12px;")
+        ai_form.addRow("", model_hint)
+        self.ai_idle_only = QCheckBox("只在空闲时段调用 AI（系统无键鼠输入时）")
+        self.ai_idle_only.setChecked(bool(config.get("ai_idle_only", True)))
+        self.ai_idle_minutes = QSpinBox()
+        self.ai_idle_minutes.setRange(1, 240)
+        self.ai_idle_minutes.setValue(int(config.get("ai_idle_minutes", 5) or 5))
+        self.ai_idle_minutes.setSuffix(" 分钟无输入")
+        self.ai_idle_start = QLineEdit(str(config.get("ai_idle_start", "00:30")))
+        self.ai_idle_end = QLineEdit(str(config.get("ai_idle_end", "08:30")))
+        idle_row = QHBoxLayout()
+        idle_row.addWidget(self.ai_idle_minutes)
+        idle_row.addWidget(QLabel("或安静时段"))
+        idle_row.addWidget(self.ai_idle_start)
+        idle_row.addWidget(QLabel("–"))
+        idle_row.addWidget(self.ai_idle_end)
+        ai_form.addRow("", self.ai_idle_only)
+        ai_form.addRow("空闲判断", idle_row)
         tabs.addTab(ai_page, "🤖 AI")
 
         # --- 周报邮件 ---
@@ -1502,6 +1563,10 @@ class AdvancedSettingsDialog(QDialog):
                 "ai_base_url": self.ai_base.text().strip(),
                 "ai_model": self.ai_model.text().strip(),
                 "ai_api_key": self.ai_key.text().strip(),
+                "ai_idle_only": self.ai_idle_only.isChecked(),
+                "ai_idle_minutes": self.ai_idle_minutes.value(),
+                "ai_idle_start": self.ai_idle_start.text().strip() or "00:00",
+                "ai_idle_end": self.ai_idle_end.text().strip() or "07:00",
                 "mail_host": self.mail_host.text().strip(),
                 "mail_port": self.mail_port.value(),
                 "mail_user": self.mail_user.text().strip(),
@@ -1707,11 +1772,35 @@ class AiPlanDialog(QDialog):
         self.generate_btn.clicked.connect(self._generate)
         self.add_btn.clicked.connect(self._on_add)
 
+    def _idle_now(self) -> bool:
+        cfg = self._config
+        if not bool(cfg.get("ai_idle_only", True)):
+            return True
+        try:
+            minutes = max(1, int(cfg.get("ai_idle_minutes", 5) or 5))
+        except (TypeError, ValueError):
+            minutes = 5
+        if _system_idle_seconds() >= minutes * 60:
+            return True
+        return _in_time_window(
+            datetime.datetime.now(),
+            str(cfg.get("ai_idle_start", "00:30")),
+            str(cfg.get("ai_idle_end", "08:30")),
+        )
+
     def _generate(self) -> None:
         cfg = self._config
         if not cfg.get("ai_enabled", True) or not cfg.get("ai_api_key"):
             QMessageBox.warning(self, "AI 未配置", "请先在「高级设置 → AI」里填写 API Key。")
             return
+        if bool(cfg.get("ai_idle_only", True)) and not self._idle_now():
+            answer = QMessageBox.question(
+                self,
+                "当前不是空闲时段",
+                "检测到键盘/鼠标仍在活动，按设置只应在空闲时调用 API。\n仍要现在生成吗？",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         text = self.task_edit.text().strip()
         if not text:
             QMessageBox.warning(self, "内容为空", "请输入复杂任务描述。")
@@ -3628,8 +3717,23 @@ class TaskbarWidget(QWidget):
             LOGGER.warning("AI 客户端不可用：%s", exc)
             return None
 
-    def _today_context(self) -> str:
-        today = core.current_day()
+    def _ai_idle_ok(self) -> bool:
+        if not bool(self.config.get("ai_idle_only", True)):
+            return True
+        try:
+            minutes = max(1, int(self.config.get("ai_idle_minutes", 5) or 5))
+        except (TypeError, ValueError):
+            minutes = 5
+        if _system_idle_seconds() >= minutes * 60:
+            return True
+        return _in_time_window(
+            datetime.datetime.now(),
+            str(self.config.get("ai_idle_start", "00:30")),
+            str(self.config.get("ai_idle_end", "08:30")),
+        )
+
+    def _today_context(self, day: Optional["datetime.date"] = None) -> str:
+        today = day or core.current_day()
         todos = self.doc.get("todos", [])
         done_today = [
             item for item in todos
@@ -3671,9 +3775,11 @@ class TaskbarWidget(QWidget):
             ensure_ascii=False,
         )[:6000]
 
-    def _rule_evaluation(self, kind: str) -> str:
-        """没配置 AI / AI 调用失败时的本地规则评价，保证记忆和周报里始终有“评价”。"""
-        today = core.current_day()
+    def _rule_evaluation(
+        self, kind: str, day: Optional["datetime.date"] = None, reason: str = "未配置 AI API"
+    ) -> str:
+        """AI 不可用 / 非空闲时段时的本地规则评价，保证记忆和周报里始终有“评价”。"""
+        today = day or core.current_day()
         todos = self.doc.get("todos", [])
         pending = core.pending_todos(self.doc)
         try:
@@ -3689,7 +3795,7 @@ class TaskbarWidget(QWidget):
                 item for item in pending
                 if str(item.get("due_date") or "") and str(item.get("due_date")) < today.isoformat()
             ]
-            parts = [f"（本地规则评价，未配置 AI API）今天完成 {len(done)} 项，剩余 {len(pending)} 项未完成"]
+            parts = [f"（本地规则评价，{reason}）今天完成 {len(done)} 项，剩余 {len(pending)} 项未完成"]
             if overdue:
                 first = str(overdue[0].get("text") or "逾期任务")
                 parts.append(f"有 {len(overdue)} 项逾期，建议明天先清理「{first}」")
@@ -3710,7 +3816,7 @@ class TaskbarWidget(QWidget):
         overdue_count = len(data.get("overdue", []))
         ledger = data.get("ledger", {}) or {}
         return (
-            f"（本地规则评价，未配置 AI API）本周完成 {completed} 项，未完成 {pending_count} 项"
+            f"（本地规则评价，{reason}）本周完成 {completed} 项，未完成 {pending_count} 项"
             f"{f'，其中逾期 {overdue_count} 项' if overdue_count else ''}；"
             f"账单收入 {core.format_money(ledger.get('income', 0))}、"
             f"支出 {core.format_money(ledger.get('expense', 0))}、"
@@ -3718,19 +3824,23 @@ class TaskbarWidget(QWidget):
             "建议下周把逾期任务拆成更小的步骤，并给重要任务预留固定时间。"
         )
 
-    def _ai_evaluate(self, kind: str) -> str:
+    def _ai_evaluate(self, kind: str, day: Optional["datetime.date"] = None) -> str:
+        target = day or core.current_day()
         client = self._ai_client()
         if client is None:
-            return self._rule_evaluation(kind)
+            return self._rule_evaluation(kind, target, "未配置 AI API")
+        if not self._ai_idle_ok():
+            LOGGER.info("当前不是空闲时段，跳过 AI 调用，使用本地规则评价")
+            return self._rule_evaluation(kind, target, "当前不是空闲时段")
         try:
             import ai_client
 
-            context = self._weekly_context() if kind == "week" else self._today_context()
+            context = self._weekly_context() if kind == "week" else self._today_context(target)
             text = str(ai_client.evaluate(kind, client, context) or "")
-            return text or self._rule_evaluation(kind)
+            return text or self._rule_evaluation(kind, target, "AI 返回为空")
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("AI 评价失败（%s）：%s", kind, exc)
-            return self._rule_evaluation(kind)
+            return self._rule_evaluation(kind, target, "AI 调用失败")
 
     def build_weekly_report(self) -> Tuple[Dict[str, Any], str, str]:
         data = core.weekly_report_data(self.doc, self.ledger_doc, _week_start(core.current_day()))
@@ -3783,47 +3893,50 @@ class TaskbarWidget(QWidget):
 
         threading.Thread(target=worker, daemon=True, name="WeeklyMail").start()
 
-    # ---- 每日记忆推送 ----
-    def push_memory_thread(self) -> None:
+    # ---- 每日记忆推送（默认凌晨 4 点推送“前一天”） ----
+    def push_memory_thread(self, target_day: Optional["datetime.date"] = None) -> None:
         if self._memory_running:
             return
         token = str(self.config.get("memory_token", "") or self.config.get("gh_token", "") or "").strip()
         if not token or not self.config.get("memory_repo"):
             QMessageBox.warning(self, "记忆仓库未配置", "请先在「高级设置 → 记忆仓库」填写仓库和 Token。")
             return
+        if target_day is None:
+            target_day = core.current_day() - datetime.timedelta(days=1)
+        moment = datetime.datetime.combine(target_day, datetime.time(23, 59))
         self._memory_running = True
-        self._notify("记忆", "正在生成并推送今日记忆…")
+        self._notify("记忆", f"正在生成并推送 {target_day.isoformat()} 的记忆…")
         config_snapshot = dict(self.config)
         config_snapshot["memory_token"] = token
         doc_snapshot = json.loads(json.dumps(self.doc))
         ledger_snapshot = json.loads(json.dumps(self.ledger_doc))
-        moment = datetime.datetime.now()
 
         def worker() -> None:
             try:
                 import memory_sync
 
-                ai_comment = self._ai_evaluate("day")
+                ai_comment = self._ai_evaluate("day", target_day)
                 memory_sync.push_daily_memory(
                     config_snapshot, doc_snapshot, ledger_snapshot, moment, ai_comment
                 )
-                self.bridge.memory_finished.emit({"ok": True, "date": moment.strftime("%Y-%m-%d")})
+                self.bridge.memory_finished.emit({"ok": True, "date": target_day.isoformat()})
             except Exception as exc:  # noqa: BLE001
-                LOGGER.exception("推送今日记忆失败")
+                LOGGER.exception("推送记忆失败")
                 self.bridge.memory_finished.emit({"ok": False, "error": str(exc)})
 
         threading.Thread(target=worker, daemon=True, name="DailyMemory").start()
 
     def _check_scheduled_jobs(self) -> None:
         now = datetime.datetime.now()
-        today = now.strftime("%Y-%m-%d")
+        target_day = now.date() - datetime.timedelta(days=1)   # 凌晨推“前一天”
+        target_iso = target_day.isoformat()
         if bool(self.config.get("memory_enabled", True)) and _hhmm_reached(
-            now, str(self.config.get("memory_time") or "23:30")
+            now, str(self.config.get("memory_time") or "04:00")
         ):
-            if time.monotonic() >= self._memory_retry_at and str(self.config.get("last_memory_date") or "") != today:
-                self.config["last_memory_date"] = today
+            if time.monotonic() >= self._memory_retry_at and str(self.config.get("last_memory_date") or "") != target_iso:
+                self.config["last_memory_date"] = target_iso
                 save_config(self.config)
-                self.push_memory_thread()
+                self.push_memory_thread(target_day)
         if bool(self.config.get("weekly_report_enabled", True)):
             iso = now.isocalendar()
             week_key = f"{iso[0]}-W{iso[1]:02d}"
