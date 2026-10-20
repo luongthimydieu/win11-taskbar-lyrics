@@ -104,7 +104,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.3.1"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -1918,6 +1918,8 @@ class TaskbarWidget(QWidget):
         self._ledger_sync_thread: Optional[threading.Thread] = None
         self._memory_running = False
         self._mail_running = False
+        self._memory_retry_at = 0.0
+        self._mail_retry_at = 0.0
 
         # 媒体 / 歌词状态
         self._media: Optional[Dict[str, Any]] = None
@@ -3669,18 +3671,66 @@ class TaskbarWidget(QWidget):
             ensure_ascii=False,
         )[:6000]
 
+    def _rule_evaluation(self, kind: str) -> str:
+        """没配置 AI / AI 调用失败时的本地规则评价，保证记忆和周报里始终有“评价”。"""
+        today = core.current_day()
+        todos = self.doc.get("todos", [])
+        pending = core.pending_todos(self.doc)
+        try:
+            week_ledger = core.ledger_week_summary(self.ledger_doc, _week_start(today))
+        except Exception:  # noqa: BLE001
+            week_ledger = {"income": 0.0, "expense": 0.0, "net": 0.0}
+        if kind == "day":
+            done = [
+                item for item in todos
+                if item.get("done") and str(item.get("done_at", ""))[:10] == today.isoformat()
+            ]
+            overdue = [
+                item for item in pending
+                if str(item.get("due_date") or "") and str(item.get("due_date")) < today.isoformat()
+            ]
+            parts = [f"（本地规则评价，未配置 AI API）今天完成 {len(done)} 项，剩余 {len(pending)} 项未完成"]
+            if overdue:
+                first = str(overdue[0].get("text") or "逾期任务")
+                parts.append(f"有 {len(overdue)} 项逾期，建议明天先清理「{first}」")
+            parts.append(
+                f"本周支出 {core.format_money(week_ledger['expense'])}、"
+                f"结余 {core.format_money(week_ledger['net'])}"
+            )
+            if len(done) == 0:
+                parts.append("今天还没有完成记录，明天从最小的一步开始即可")
+            elif len(pending) == 0:
+                parts.append("待办已清空，保持这个节奏")
+            else:
+                parts.append("先完成最重要的一项，比同时铺开更有效")
+            return "；".join(parts) + "。"
+        data = core.weekly_report_data(self.doc, self.ledger_doc, _week_start(today))
+        completed = len(data.get("completed", []))
+        pending_count = len(data.get("pending", []))
+        overdue_count = len(data.get("overdue", []))
+        ledger = data.get("ledger", {}) or {}
+        return (
+            f"（本地规则评价，未配置 AI API）本周完成 {completed} 项，未完成 {pending_count} 项"
+            f"{f'，其中逾期 {overdue_count} 项' if overdue_count else ''}；"
+            f"账单收入 {core.format_money(ledger.get('income', 0))}、"
+            f"支出 {core.format_money(ledger.get('expense', 0))}、"
+            f"结余 {core.format_money(ledger.get('net', 0))}。"
+            "建议下周把逾期任务拆成更小的步骤，并给重要任务预留固定时间。"
+        )
+
     def _ai_evaluate(self, kind: str) -> str:
         client = self._ai_client()
         if client is None:
-            return ""
+            return self._rule_evaluation(kind)
         try:
             import ai_client
 
             context = self._weekly_context() if kind == "week" else self._today_context()
-            return str(ai_client.evaluate(kind, client, context) or "")
+            text = str(ai_client.evaluate(kind, client, context) or "")
+            return text or self._rule_evaluation(kind)
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("AI 评价失败（%s）：%s", kind, exc)
-            return ""
+            return self._rule_evaluation(kind)
 
     def build_weekly_report(self) -> Tuple[Dict[str, Any], str, str]:
         data = core.weekly_report_data(self.doc, self.ledger_doc, _week_start(core.current_day()))
@@ -3770,7 +3820,7 @@ class TaskbarWidget(QWidget):
         if bool(self.config.get("memory_enabled", True)) and _hhmm_reached(
             now, str(self.config.get("memory_time") or "23:30")
         ):
-            if str(self.config.get("last_memory_date") or "") != today:
+            if time.monotonic() >= self._memory_retry_at and str(self.config.get("last_memory_date") or "") != today:
                 self.config["last_memory_date"] = today
                 save_config(self.config)
                 self.push_memory_thread()
@@ -3784,6 +3834,7 @@ class TaskbarWidget(QWidget):
             if (
                 now.isoweekday() == target_weekday
                 and _hhmm_reached(now, str(self.config.get("weekly_report_time") or "21:00"))
+                and time.monotonic() >= self._mail_retry_at
                 and str(self.config.get("last_report_week") or "") != week_key
             ):
                 self.config["last_report_week"] = week_key
@@ -3795,6 +3846,10 @@ class TaskbarWidget(QWidget):
         if result.get("ok"):
             self._notify("周报已发送", str(result.get("subject") or "本周总结"))
         else:
+            # 失败则允许下一轮重试（10 分钟后，避免代理/网络故障时每 30 秒刷屏）
+            self._mail_retry_at = time.monotonic() + 600
+            self.config["last_report_week"] = ""
+            save_config(self.config)
             self._notify("周报发送失败", str(result.get("error") or "未知错误"))
 
     def on_memory_finished(self, result: Dict[str, Any]) -> None:
@@ -3802,6 +3857,10 @@ class TaskbarWidget(QWidget):
         if result.get("ok"):
             self._notify("记忆已推送", f"已写入 taskbar-memory（{result.get('date')}）")
         else:
+            # 失败则允许当天稍后重试（10 分钟后）
+            self._memory_retry_at = time.monotonic() + 600
+            self.config["last_memory_date"] = ""
+            save_config(self.config)
             self._notify("记忆推送失败", str(result.get("error") or "未知错误"))
 
     def open_advanced_settings(self) -> None:
@@ -3987,11 +4046,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.selftest:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         try:
-            import ai_client  # noqa: F401
-            import memory_sync  # noqa: F401
-            import reporting  # noqa: F401
+            import ai_client
+            import memory_sync
+            import reporting
 
-            LOGGER.info("selftest: ai_client / reporting / memory_sync 导入成功")
+            LOGGER.info(
+                "selftest: %s / %s / %s 导入成功",
+                ai_client.__name__,
+                reporting.__name__,
+                memory_sync.__name__,
+            )
         except Exception as exc:  # noqa: BLE001
             LOGGER.error("selftest: 集成模块导入失败：%s", exc)
             return 1
