@@ -108,7 +108,7 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.3.6"
+APP_VERSION = "1.3.7"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
@@ -1756,28 +1756,44 @@ class AiPlanDialog(QDialog):
         config: Dict[str, Any],
         queue_mode: bool = False,
         idle_at: Optional["datetime.datetime"] = None,
+        default_horizon: int = 14,
+        default_granularity: str = "standard",
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("⏳ AI 任务排队（高峰时段）" if queue_mode else "🤖 AI 拆解复杂任务")
+        long_term = int(default_horizon) >= 21
+        self.setWindowTitle(
+            "⏳ AI 任务排队（高峰时段）"
+            if queue_mode
+            else ("📅 长期任务规划（AI 排期）" if long_term else "🤖 AI 拆解复杂任务")
+        )
         self.setModal(True)
-        self.resize(700, 560)
+        self.resize(700, 620)
         self._config = dict(config)
         self._plan: Optional[Dict[str, Any]] = None
         self.queue_mode = bool(queue_mode)
         self.queued = False
 
         layout = QVBoxLayout(self)
+        intro = QLabel(
+            "📅 长期任务：描述目标 + 选好期限/每天投入/粒度，AI 会拆成多天可执行的子任务；"
+            "高峰时段只排队，空闲后自动生成并加入待办。"
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#94a3b8;font-size:12px;")
+        layout.addWidget(intro)
         form = QFormLayout()
         self.task_edit = QLineEdit()
-        self.task_edit.setPlaceholderText("例如：两周内完成课程设计报告（含调研、实验、写作、答辩准备）")
-        form.addRow("复杂任务", self.task_edit)
+        self.task_edit.setPlaceholderText(
+            "例如：3 周内完成数学建模竞赛（选题、数据、建模、论文、答辩），每天 2 小时"
+        )
+        form.addRow("长期任务", self.task_edit)
         self.horizon_spin = QSpinBox()
-        self.horizon_spin.setRange(3, 60)
-        self.horizon_spin.setValue(14)
+        self.horizon_spin.setRange(3, 120)
+        self.horizon_spin.setValue(max(3, min(120, int(default_horizon))))
         self.horizon_spin.setSuffix(" 天内完成")
-        form.addRow("时间范围", self.horizon_spin)
+        form.addRow("完成期限", self.horizon_spin)
         preset_row = QHBoxLayout()
-        for days, label in ((3, "3 天"), (7, "1 周"), (14, "2 周"), (30, "1 个月")):
+        for days, label in ((7, "1 周"), (14, "2 周"), (30, "1 个月"), (60, "2 个月")):
             preset_btn = QPushButton(label)
             preset_btn.setMinimumHeight(34)
             preset_btn.clicked.connect(lambda _checked=False, d=days: self.horizon_spin.setValue(d))
@@ -1794,7 +1810,11 @@ class AiPlanDialog(QDialog):
             ("详细（8–12 步）", "detailed"),
         ):
             self.granularity_combo.addItem(label, code)
-        self.granularity_combo.setCurrentIndex(1)
+        granularity_codes = ["concise", "standard", "detailed"]
+        granularity_code = str(default_granularity or "standard").strip().lower()
+        self.granularity_combo.setCurrentIndex(
+            granularity_codes.index(granularity_code) if granularity_code in granularity_codes else 1
+        )
         form.addRow("拆分粒度", self.granularity_combo)
         self.weekend_combo = QComboBox()
         self.weekend_combo.addItem("只在工作日安排", False)
@@ -3469,6 +3489,7 @@ class TaskbarWidget(QWidget):
             menu.addSeparator()
 
         quick_menu = menu.addMenu("➕ 待办 / 记账 / 周报 / 记忆")
+        quick_menu.addAction("📅 长期任务规划（AI 排期）…", self.long_term_plan_dialog)
         quick_menu.addAction("➕ 添加待办…", self.add_todo_dialog)
         quick_menu.addAction("🤖 AI 拆解复杂任务…", self.ai_plan_dialog)
         if self.ai_queue:
@@ -3775,7 +3796,8 @@ class TaskbarWidget(QWidget):
         due = f"（目标 {values['due_date']}）" if values["due_date"] else ""
         self._notify("已添加待办", f"{values['text']}{due}")
 
-    def ai_plan_dialog(self) -> None:
+    def ai_plan_dialog(self, default_horizon: int = 14, default_granularity: str = "standard") -> None:
+        """打开 AI 规划弹窗；``default_horizon`` 较大时即“长期任务规划”。"""
         if not str(self.config.get("ai_api_key", "")).strip():
             answer = QMessageBox.question(
                 self,
@@ -3791,13 +3813,20 @@ class TaskbarWidget(QWidget):
                 self.config,
                 queue_mode=True,
                 idle_at=self.ai_calendar.next_idle_start(),
+                default_horizon=default_horizon,
+                default_granularity=default_granularity,
             )
             if dialog.exec() == QDialog.DialogCode.Accepted and dialog.is_queued():
                 self._enqueue_ai_task(
                     dialog.task_text(), dialog.horizon_days(), dialog.options()
                 )
             return
-        dialog = AiPlanDialog(self, self.config)
+        dialog = AiPlanDialog(
+            self,
+            self.config,
+            default_horizon=default_horizon,
+            default_granularity=default_granularity,
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         plan = dialog.plan() or {}
@@ -3806,6 +3835,10 @@ class TaskbarWidget(QWidget):
             return
         count = self._apply_ai_plan(plan, default_title=dialog.task_text())
         self._notify("AI 拆解完成", f"《{plan.get('title') or dialog.task_text()}》已拆成 {count} 个子任务")
+
+    def long_term_plan_dialog(self) -> None:
+        """「长期任务」按钮：默认 1 个月、详细粒度、工作日安排的 AI 排期。"""
+        self.ai_plan_dialog(default_horizon=30, default_granularity="detailed")
 
     def _apply_ai_plan(self, plan: Dict[str, Any], default_title: str = "复杂任务") -> int:
         steps = plan.get("steps") or []
@@ -4368,6 +4401,7 @@ class TaskbarWidget(QWidget):
         tray_menu = QMenu(self)
         tray_menu.addAction("显示 / 隐藏", self.toggle_visibility)
         tray_quick = tray_menu.addMenu("➕ 待办 / 记账 / 周报")
+        tray_quick.addAction("📅 长期任务规划（AI 排期）…", self.long_term_plan_dialog)
         tray_quick.addAction("➕ 添加待办…", self.add_todo_dialog)
         tray_quick.addAction("🤖 AI 拆解复杂任务…", self.ai_plan_dialog)
         tray_quick.addAction("💰 记一笔…", self.ledger_dialog)
