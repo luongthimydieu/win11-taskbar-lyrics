@@ -49,6 +49,12 @@ if (Test-Path -LiteralPath $logoPng) {
     $pyInstallerArgs += @("--add-data", "$logoPng;.")
     Write-Host "内置 Logo：logo.png" -ForegroundColor DarkGray
 }
+# 内置中国法定节假日数据（AI 高峰/空闲判断用）
+$holidaysJson = Join-Path $PSScriptRoot "holidays_cn.json"
+if (Test-Path -LiteralPath $holidaysJson) {
+    $pyInstallerArgs += @("--add-data", "$holidaysJson;.")
+    Write-Host "内置节假日：holidays_cn.json" -ForegroundColor DarkGray
+}
 
 # 当前环境装了哪个媒体后端，就把哪个整体收集进包。
 # 注意：这里用 cmd 静默探测，避免 PowerShell 把 Python 的 stderr/ImportError 当成脚本错误。

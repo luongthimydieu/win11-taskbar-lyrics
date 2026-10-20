@@ -96,6 +96,7 @@ from PyQt6.QtWidgets import (
 )
 
 import core
+import ai_schedule
 
 LOGGER = logging.getLogger("taskbar.widget")
 
@@ -105,12 +106,14 @@ LOGGER = logging.getLogger("taskbar.widget")
 
 APP_NAME = "Win11TaskbarLyrics"
 APP_TITLE = "Win11 任务栏歌词 · 跨端待办"
-APP_VERSION = "1.3.3"
+APP_VERSION = "1.3.4"
 
 APP_DIR = Path(os.environ.get("APPDATA") or Path.home()) / APP_NAME
 CONFIG_PATH = APP_DIR / "config.json"
 STATE_PATH = APP_DIR / "state.json"
 LEDGER_STATE_PATH = APP_DIR / "ledger_state.json"
+AI_QUEUE_PATH = APP_DIR / "ai_queue.json"
+HOLIDAY_CACHE_PATH = APP_DIR / "holidays_cache.json"
 LOG_PATH = APP_DIR / "app.log"
 #: 调试用：每次界面文字变化时把“当前实际要显示的文字”落盘，便于区分“状态没更新”还是“画面没重绘”
 DEBUG_TEXT_PATH = APP_DIR / "last_text.json"
@@ -150,10 +153,6 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "last_memory_date": "",
     "last_report_week": "",
     # AI 只在空闲时调用（系统无键鼠输入 ≥ N 分钟，或处于安静时段）
-    "ai_idle_only": True,
-    "ai_idle_minutes": 5,
-    "ai_idle_start": "00:30",
-    "ai_idle_end": "08:30",
     "offset_ratio": 0.0,       # 0=自动；拖拽后保存为相对任务栏宽度的比例
     "auto_anchor": True,       # True=自动贴到托盘区左侧的空位
     "width": DEFAULT_WIDTH,
@@ -381,39 +380,6 @@ def _hhmm_reached(now: "datetime.datetime", value: str) -> bool:
 
 def _week_start(moment: "datetime.date") -> "datetime.date":
     return moment - datetime.timedelta(days=moment.weekday())
-
-
-def _in_time_window(now: "datetime.datetime", start: str, end: str) -> bool:
-    """判断 now 是否处于 [start, end) 时段，支持跨午夜（如 23:00–07:00）。"""
-    try:
-        sh, sm = [int(part) for part in str(start).strip().split(":", 1)]
-        eh, em = [int(part) for part in str(end).strip().split(":", 1)]
-    except (TypeError, ValueError):
-        return False
-    minutes = now.hour * 60 + now.minute
-    start_min = sh * 60 + sm
-    end_min = eh * 60 + em
-    if start_min <= end_min:
-        return start_min <= minutes < end_min
-    return minutes >= start_min or minutes < end_min
-
-
-def _system_idle_seconds() -> float:
-    """Windows 下距离最后一次键盘/鼠标输入的秒数。"""
-    try:
-        class _LASTINPUTINFO(ctypes.Structure):
-            _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
-
-        info = _LASTINPUTINFO()
-        info.cbSize = ctypes.sizeof(info)
-        user32 = ctypes.WinDLL("user32", use_last_error=True)
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        if not user32.GetLastInputInfo(ctypes.byref(info)):
-            return 0.0
-        ticks = kernel32.GetTickCount()
-        return max(0.0, (ticks - info.dwTime) / 1000.0)
-    except Exception:  # noqa: BLE001
-        return 0.0
 
 
 def acquire_single_instance() -> bool:
@@ -1147,6 +1113,8 @@ class Bridge(QObject):
     report_ready = pyqtSignal(object)
     mail_finished = pyqtSignal(dict)
     memory_finished = pyqtSignal(dict)
+    calendar_ready = pyqtSignal(object)
+    ai_queue_result = pyqtSignal(object)
 
 
 # ---------------------------------------------------------------------------
@@ -1451,22 +1419,15 @@ class AdvancedSettingsDialog(QDialog):
         model_hint.setWordWrap(True)
         model_hint.setStyleSheet("color:#64748b;font-size:12px;")
         ai_form.addRow("", model_hint)
-        self.ai_idle_only = QCheckBox("只在空闲时段调用 AI（系统无键鼠输入时）")
-        self.ai_idle_only.setChecked(bool(config.get("ai_idle_only", True)))
-        self.ai_idle_minutes = QSpinBox()
-        self.ai_idle_minutes.setRange(1, 240)
-        self.ai_idle_minutes.setValue(int(config.get("ai_idle_minutes", 5) or 5))
-        self.ai_idle_minutes.setSuffix(" 分钟无输入")
-        self.ai_idle_start = QLineEdit(str(config.get("ai_idle_start", "00:30")))
-        self.ai_idle_end = QLineEdit(str(config.get("ai_idle_end", "08:30")))
-        idle_row = QHBoxLayout()
-        idle_row.addWidget(self.ai_idle_minutes)
-        idle_row.addWidget(QLabel("或安静时段"))
-        idle_row.addWidget(self.ai_idle_start)
-        idle_row.addWidget(QLabel("–"))
-        idle_row.addWidget(self.ai_idle_end)
-        ai_form.addRow("", self.ai_idle_only)
-        ai_form.addRow("空闲判断", idle_row)
+        policy_hint = QLabel(
+            "AI 调用时段：北京时间**周一至周五 09:00–12:00、14:00–18:00**（不含中国法定节假日）为高峰，"
+            "期间不调用 AI；其余时间（12:00–14:00、18:00–次日 09:00、周末、法定节假日全天）为空闲时段。"
+            "高峰时点「AI 拆解」会先排队，进入空闲后自动用 deepseek-flash 拆解并加入待办。"
+            "节假日数据随包内置，并会自动从 holiday-cn 刷新缓存。"
+        )
+        policy_hint.setWordWrap(True)
+        policy_hint.setStyleSheet("color:#94a3b8;font-size:12px;line-height:1.55;")
+        ai_form.addRow("调用时段", policy_hint)
         tabs.addTab(ai_page, "🤖 AI")
 
         # --- 周报邮件 ---
@@ -1564,10 +1525,6 @@ class AdvancedSettingsDialog(QDialog):
                 "ai_base_url": self.ai_base.text().strip(),
                 "ai_model": self.ai_model.text().strip(),
                 "ai_api_key": self.ai_key.text().strip(),
-                "ai_idle_only": self.ai_idle_only.isChecked(),
-                "ai_idle_minutes": self.ai_idle_minutes.value(),
-                "ai_idle_start": self.ai_idle_start.text().strip() or "00:00",
-                "ai_idle_end": self.ai_idle_end.text().strip() or "07:00",
                 "mail_host": self.mail_host.text().strip(),
                 "mail_port": self.mail_port.value(),
                 "mail_user": self.mail_user.text().strip(),
@@ -1732,15 +1689,27 @@ class AddTodoDialog(QDialog):
 
 
 class AiPlanDialog(QDialog):
-    """输入一个复杂任务，调用 AI 拆成多个带日期的小任务。"""
+    """输入一个复杂任务，调用 AI 拆成多个带日期的小任务。
 
-    def __init__(self, parent: Optional[QWidget], config: Dict[str, Any]) -> None:
+    高峰时段以 ``queue_mode=True`` 打开：不调用 API，只把任务收进排队，等空闲时段
+    由主程序自动拆解并加入待办。
+    """
+
+    def __init__(
+        self,
+        parent: Optional[QWidget],
+        config: Dict[str, Any],
+        queue_mode: bool = False,
+        idle_at: Optional["datetime.datetime"] = None,
+    ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("🤖 AI 拆解复杂任务")
+        self.setWindowTitle("⏳ AI 任务排队（高峰时段）" if queue_mode else "🤖 AI 拆解复杂任务")
         self.setModal(True)
         self.resize(700, 560)
         self._config = dict(config)
         self._plan: Optional[Dict[str, Any]] = None
+        self.queue_mode = bool(queue_mode)
+        self.queued = False
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -1755,11 +1724,10 @@ class AiPlanDialog(QDialog):
         layout.addLayout(form)
 
         self.preview = QTextBrowser()
-        self.preview.setPlaceholderText("生成后在这里预览拆解结果…")
         layout.addWidget(self.preview, 1)
 
         row = QHBoxLayout()
-        self.generate_btn = QPushButton("生成计划")
+        self.generate_btn = QPushButton("加入排队" if self.queue_mode else "生成计划")
         self.add_btn = QPushButton("加入待办")
         self.add_btn.setEnabled(False)
         row.addWidget(self.generate_btn)
@@ -1770,38 +1738,35 @@ class AiPlanDialog(QDialog):
         buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
         layout.addWidget(buttons)
         buttons.rejected.connect(self.reject)
-        self.generate_btn.clicked.connect(self._generate)
-        self.add_btn.clicked.connect(self._on_add)
 
-    def _idle_now(self) -> bool:
-        cfg = self._config
-        if not bool(cfg.get("ai_idle_only", True)):
-            return True
-        try:
-            minutes = max(1, int(cfg.get("ai_idle_minutes", 5) or 5))
-        except (TypeError, ValueError):
-            minutes = 5
-        if _system_idle_seconds() >= minutes * 60:
-            return True
-        return _in_time_window(
-            datetime.datetime.now(),
-            str(cfg.get("ai_idle_start", "00:30")),
-            str(cfg.get("ai_idle_end", "08:30")),
-        )
+        if self.queue_mode:
+            self.add_btn.setVisible(False)
+            when = ""
+            if idle_at is not None:
+                when = f"预计 **{idle_at.strftime('%m-%d %H:%M')}** 进入空闲时段后自动运行。"
+            self.preview.setMarkdown(
+                "⏳ **当前是高峰时段，暂不调用 AI。**\n\n"
+                "按设置，北京时间周一至周五 09:00–12:00、14:00–18:00（不含法定节假日）为高峰；"
+                "任务会先排队，不消耗 token。\n\n" + when +
+                "\n\n运行时会自动拆解成带日期的小任务并加入待办，完成后托盘提示。"
+            )
+            self.generate_btn.clicked.connect(self._enqueue)
+        else:
+            self.generate_btn.clicked.connect(self._generate)
+            self.add_btn.clicked.connect(self._on_add)
+
+    def _enqueue(self) -> None:
+        if not self.task_edit.text().strip():
+            QMessageBox.warning(self, "内容为空", "请输入复杂任务描述。")
+            return
+        self.queued = True
+        self.accept()
 
     def _generate(self) -> None:
         cfg = self._config
         if not cfg.get("ai_enabled", True) or not cfg.get("ai_api_key"):
             QMessageBox.warning(self, "AI 未配置", "请先在「高级设置 → AI」里填写 API Key。")
             return
-        if bool(cfg.get("ai_idle_only", True)) and not self._idle_now():
-            answer = QMessageBox.question(
-                self,
-                "当前不是空闲时段",
-                "检测到键盘/鼠标仍在活动，按设置只应在空闲时调用 API。\n仍要现在生成吗？",
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
         text = self.task_edit.text().strip()
         if not text:
             QMessageBox.warning(self, "内容为空", "请输入复杂任务描述。")
@@ -1841,6 +1806,15 @@ class AiPlanDialog(QDialog):
 
     def plan(self) -> Optional[Dict[str, Any]]:
         return self._plan
+
+    def task_text(self) -> str:
+        return self.task_edit.text().strip()
+
+    def horizon_days(self) -> int:
+        return int(self.horizon_spin.value())
+
+    def is_queued(self) -> bool:
+        return self.queued
 
 
 class LedgerDialog(QDialog):
@@ -2001,9 +1975,17 @@ class TaskbarWidget(QWidget):
         self.bridge.ledger_sync_finished.connect(self.on_ledger_sync_finished)
         self.bridge.mail_finished.connect(self.on_mail_finished)
         self.bridge.memory_finished.connect(self.on_memory_finished)
+        self.bridge.calendar_ready.connect(self.on_calendar_ready)
+        self.bridge.ai_queue_result.connect(self.on_ai_queue_result)
 
         self.netease = core.NetEaseClient()
         self.store = self._build_store()
+
+        # AI 空闲时段 / 排队（高峰只排队，空闲自动运行）
+        self.ai_calendar = ai_schedule.load_calendar(APP_DIR)
+        self.ai_queue: List[Dict[str, Any]] = self._load_ai_queue()
+        self._ai_queue_running = False
+        self._ai_queue_retry_at = 0.0
 
         # 记账（独立 Gist + 本地缓存）
         ledger_state = load_ledger_state()
@@ -2578,6 +2560,10 @@ class TaskbarWidget(QWidget):
             QTimer.singleShot(2500, self._ensure_ledger_gist)
             QTimer.singleShot(4000, self.request_ledger_sync)
             QTimer.singleShot(5000, self._check_scheduled_jobs)
+            QTimer.singleShot(7000, self._check_ai_queue)
+            threading.Thread(
+                target=self._refresh_holidays_worker, daemon=True, name="HolidayRefresh"
+            ).start()
 
         try:
             app = QGuiApplication.instance()
@@ -3380,6 +3366,15 @@ class TaskbarWidget(QWidget):
         quick_menu = menu.addMenu("➕ 待办 / 记账 / 周报 / 记忆")
         quick_menu.addAction("➕ 添加待办…", self.add_todo_dialog)
         quick_menu.addAction("🤖 AI 拆解复杂任务…", self.ai_plan_dialog)
+        if self.ai_queue:
+            queue_menu = quick_menu.addMenu(f"⏳ AI 排队任务（{len(self.ai_queue)}）")
+            for item in self.ai_queue[:6]:
+                queue_menu.addAction(
+                    f"❌ 取消：{str(item.get('text') or '')[:18]}",
+                    lambda _checked=False, qid=item.get("id"): self.cancel_ai_queue_item(qid),
+                )
+            queue_menu.addSeparator()
+            queue_menu.addAction("立即检查（仅空闲时段运行）", self._check_ai_queue)
         quick_menu.addAction("💰 记一笔 / 本周账本…", self.ledger_dialog)
         quick_menu.addAction("📊 周报预览…", self.show_weekly_report)
         quick_menu.addAction("📤 立即发送周报", self.send_weekly_report_thread)
@@ -3647,15 +3642,31 @@ class TaskbarWidget(QWidget):
             if answer == QMessageBox.StandardButton.Yes:
                 self.open_advanced_settings()
             return
+        if not self._ai_idle_ok():
+            dialog = AiPlanDialog(
+                self,
+                self.config,
+                queue_mode=True,
+                idle_at=self.ai_calendar.next_idle_start(),
+            )
+            if dialog.exec() == QDialog.DialogCode.Accepted and dialog.is_queued():
+                self._enqueue_ai_task(dialog.task_text(), dialog.horizon_days())
+            return
         dialog = AiPlanDialog(self, self.config)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         plan = dialog.plan() or {}
-        steps = plan.get("steps") or []
-        if not steps:
+        if not (plan.get("steps") or []):
             QMessageBox.warning(self, "没有拆解结果", "AI 没有返回可用的子任务。")
             return
-        title = str(plan.get("title") or "复杂任务")
+        count = self._apply_ai_plan(plan, default_title=dialog.task_text())
+        self._notify("AI 拆解完成", f"《{plan.get('title') or dialog.task_text()}》已拆成 {count} 个子任务")
+
+    def _apply_ai_plan(self, plan: Dict[str, Any], default_title: str = "复杂任务") -> int:
+        steps = plan.get("steps") or []
+        if not steps:
+            return 0
+        title = str(plan.get("title") or default_title or "复杂任务")
         parent_due = str(steps[-1].get("due_date") or "")
         total_minutes = sum(int(step.get("estimate_minutes") or 0) for step in steps)
         try:
@@ -3678,7 +3689,126 @@ class TaskbarWidget(QWidget):
                 self.doc, _child = core.add_todo(self.doc, str(step.get("text") or ""))
         self._persist_and_sync()
         self.refresh_texts()
-        self._notify("AI 拆解完成", f"《{title}》已拆成 {len(steps)} 个子任务")
+        return len(steps)
+
+    # ---- AI 排队（高峰时段不调用，空闲自动运行） ----
+    def _load_ai_queue(self) -> List[Dict[str, Any]]:
+        try:
+            if AI_QUEUE_PATH.exists():
+                payload = json.loads(AI_QUEUE_PATH.read_text(encoding="utf-8"))
+                if isinstance(payload, list):
+                    return [
+                        item for item in payload
+                        if isinstance(item, dict) and str(item.get("text") or "").strip()
+                    ]
+        except (OSError, ValueError) as exc:
+            LOGGER.warning("读取 AI 排队失败：%s", exc)
+        return []
+
+    def _save_ai_queue(self) -> None:
+        try:
+            ensure_app_dir()
+            _atomic_write_json(AI_QUEUE_PATH, self.ai_queue)
+        except OSError as exc:
+            LOGGER.warning("保存 AI 排队失败：%s", exc)
+
+    def _enqueue_ai_task(self, text: str, horizon_days: int) -> None:
+        text = str(text or "").strip()
+        if not text:
+            return
+        item = {
+            "id": f"aiq-{int(time.time() * 1000)}",
+            "text": text,
+            "horizon_days": int(horizon_days or 14),
+            "created_at": datetime.datetime.now(ai_schedule.BEIJING_TZ).isoformat(timespec="seconds"),
+            "attempts": 0,
+        }
+        self.ai_queue.append(item)
+        self._save_ai_queue()
+        self._notify(
+            "已加入 AI 排队",
+            f"当前是高峰时段，任务会在空闲时段（约 {self._next_idle_text()}）自动拆解并加入待办",
+        )
+
+    def cancel_ai_queue_item(self, queue_id: str) -> None:
+        before = len(self.ai_queue)
+        self.ai_queue = [item for item in self.ai_queue if item.get("id") != queue_id]
+        if len(self.ai_queue) != before:
+            self._save_ai_queue()
+            self._notify("已取消排队任务", "AI 排队列表已更新")
+
+    def _check_ai_queue(self) -> None:
+        if self._ai_queue_running or not self.ai_queue:
+            return
+        if time.monotonic() < self._ai_queue_retry_at:
+            return
+        if not self._ai_idle_ok():
+            return
+        client = self._ai_client()
+        if client is None:
+            return
+        item = self.ai_queue[0]
+        self._ai_queue_running = True
+
+        def worker() -> None:
+            try:
+                import ai_client
+
+                plan = ai_client.plan_complex_task(
+                    client,
+                    str(item.get("text") or ""),
+                    core.current_day(),
+                    horizon_days=int(item.get("horizon_days") or 14),
+                )
+                self.bridge.ai_queue_result.emit({"ok": True, "id": item.get("id"), "plan": plan})
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("AI 排队任务执行失败")
+                self.bridge.ai_queue_result.emit(
+                    {"ok": False, "id": item.get("id"), "error": str(exc)}
+                )
+
+        threading.Thread(target=worker, daemon=True, name="AiQueue").start()
+
+    def on_ai_queue_result(self, result: Dict[str, Any]) -> None:
+        self._ai_queue_running = False
+        queue_id = str(result.get("id") or "")
+        item = next((entry for entry in self.ai_queue if entry.get("id") == queue_id), None)
+        if result.get("ok"):
+            plan = result.get("plan") or {}
+            title = str(plan.get("title") or (item or {}).get("text") or "复杂任务")
+            count = self._apply_ai_plan(plan, default_title=title)
+            self.ai_queue = [entry for entry in self.ai_queue if entry.get("id") != queue_id]
+            self._save_ai_queue()
+            self._notify("AI 排队任务已完成", f"《{title}》已拆成 {count} 个子任务并加入待办")
+            return
+        error = str(result.get("error") or "未知错误")
+        if item is not None:
+            item["attempts"] = int(item.get("attempts") or 0) + 1
+            if item["attempts"] >= 3:
+                self.ai_queue = [entry for entry in self.ai_queue if entry.get("id") != queue_id]
+                self._notify("AI 排队任务失败", f"已重试 3 次，任务已移除：{error}")
+            else:
+                self._notify(
+                    "AI 排队任务失败",
+                    f"将在约 10 分钟后重试：{error}",
+                )
+        self._save_ai_queue()
+        self._ai_queue_retry_at = time.monotonic() + 600
+
+    def on_calendar_ready(self, calendar: Any) -> None:
+        if isinstance(calendar, ai_schedule.HolidayCalendar):
+            self.ai_calendar = calendar
+            LOGGER.info("节假日数据已刷新：%d 天", len(calendar.dates))
+            self._check_ai_queue()
+
+    def _refresh_holidays_worker(self) -> None:
+        try:
+            if HOLIDAY_CACHE_PATH.exists() and (time.time() - HOLIDAY_CACHE_PATH.stat().st_mtime) < 7 * 86400:
+                return
+            dates = ai_schedule.refresh_holidays(HOLIDAY_CACHE_PATH, timeout=10)
+            self.bridge.calendar_ready.emit(ai_schedule.HolidayCalendar(dates))
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("刷新节假日数据失败：%s", exc)
 
     def ledger_dialog(self) -> None:
         dialog = LedgerDialog(self, self.ledger_doc)
@@ -3726,19 +3856,18 @@ class TaskbarWidget(QWidget):
             return None
 
     def _ai_idle_ok(self) -> bool:
-        if not bool(self.config.get("ai_idle_only", True)):
-            return True
+        """按用户规则判断：高峰 = 北京时间周一至周五 09:00–12:00 / 14:00–18:00（不含法定节假日）。"""
         try:
-            minutes = max(1, int(self.config.get("ai_idle_minutes", 5) or 5))
-        except (TypeError, ValueError):
-            minutes = 5
-        if _system_idle_seconds() >= minutes * 60:
+            return self.ai_calendar.is_idle(datetime.datetime.now(ai_schedule.BEIJING_TZ))
+        except Exception:  # noqa: BLE001
             return True
-        return _in_time_window(
-            datetime.datetime.now(),
-            str(self.config.get("ai_idle_start", "00:30")),
-            str(self.config.get("ai_idle_end", "08:30")),
-        )
+
+    def _next_idle_text(self) -> str:
+        try:
+            moment = self.ai_calendar.next_idle_start()
+            return moment.strftime("%m-%d %H:%M")
+        except Exception:  # noqa: BLE001
+            return "空闲时段"
 
     def _today_context(self, day: Optional["datetime.date"] = None) -> str:
         today = day or core.current_day()
@@ -3838,8 +3967,8 @@ class TaskbarWidget(QWidget):
         if client is None:
             return self._rule_evaluation(kind, target, "未配置 AI API")
         if not self._ai_idle_ok():
-            LOGGER.info("当前不是空闲时段，跳过 AI 调用，使用本地规则评价")
-            return self._rule_evaluation(kind, target, "当前不是空闲时段")
+            LOGGER.info("当前是高峰时段，跳过 AI 调用，使用本地规则评价")
+            return self._rule_evaluation(kind, target, "当前是高峰时段")
         try:
             import ai_client
 
@@ -3961,6 +4090,7 @@ class TaskbarWidget(QWidget):
                 self.config["last_report_week"] = week_key
                 save_config(self.config)
                 self.send_weekly_report_thread()
+        self._check_ai_queue()
 
     def on_mail_finished(self, result: Dict[str, Any]) -> None:
         self._mail_running = False
